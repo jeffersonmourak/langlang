@@ -1,28 +1,30 @@
 
 # Table of Contents
 
-1.  [Introduction](#org8732973)
-    1.  [Project Status](#orge7a5a11)
-    2.  [Currently supported output languages](#org089cdd8)
-        1.  [Notes](#orgefa277d)
-    3.  [Basic Usage](#org70d99bb)
-2.  [Input Language](#org91326ec)
-    1.  [Productions and Expressions](#org0f6995b)
-    2.  [Terminals](#org8644a5d)
-    3.  [Non-Terminals](#org93b29d7)
-    4.  [Expression Composition](#org4574f72)
-        1.  [Ordered Choice](#org77a3e72)
-        2.  [Syntactic Predicates](#orgeb93c03)
-        3.  [Repetitions](#org0849921)
-        4.  [Lexification](#orga52c89c)
-        5.  [Error reporting with Labels](#org55404e7)
-        6.  [Import system](#org1ef85e7)
-3.  [Generator Options](#org201e3a6)
-    1.  [Go](#org894b7c3)
-4.  [Roadmap](#orgebfe363)
+1.  [Introduction](#org123c0d0)
+    1.  [Project Status](#orgce97716)
+    2.  [Currently supported output languages](#org26e02df)
+        1.  [Notes](#org0d04646)
+    3.  [Basic Usage](#org3665b59)
+2.  [Input Language](#orge1fd9b8)
+    1.  [Productions and Expressions](#orgd8aecbf)
+    2.  [Terminals](#orgcfb79b8)
+    3.  [Non-Terminals](#org419521f)
+    4.  [Expression Composition](#org8cb0ca3)
+        1.  [Ordered Choice](#org8a5a70e)
+        2.  [Syntactic Predicates](#org1263c2b)
+        3.  [Repetitions](#org96f387c)
+        4.  [Lexification](#org5eaf898)
+        5.  [Error reporting with Labels](#org87c30b1)
+        6.  [Import system](#org8ac3884)
+3.  [Generator Options](#org1dc0011)
+    1.  [Go](#org38456d4)
+4.  [Roadmap](#org787c96d)
+5.  [Changelog](#orgdd4bd2b)
+    1.  [go/v0.0.5](#orgc8d358a)
 
 
-<a id="org8732973"></a>
+<a id="org123c0d0"></a>
 
 # Introduction
 
@@ -38,7 +40,7 @@ different languages.  The are reasons why you might want to use this:
     parsing errors.
 
 
-<a id="orge7a5a11"></a>
+<a id="orgce97716"></a>
 
 ## Project Status
 
@@ -50,7 +52,7 @@ different languages.  The are reasons why you might want to use this:
     first, then being stable, then being featureful.
 
 
-<a id="org089cdd8"></a>
+<a id="org26e02df"></a>
 
 ## Currently supported output languages
 
@@ -61,7 +63,7 @@ different languages.  The are reasons why you might want to use this:
 -   [ ] Write your own code generator
 
 
-<a id="orgefa277d"></a>
+<a id="org0d04646"></a>
 
 ### Notes
 
@@ -81,7 +83,7 @@ different languages.  The are reasons why you might want to use this:
     languages than Rust and Go.
 
 
-<a id="org70d99bb"></a>
+<a id="org3665b59"></a>
 
 ## Basic Usage
 
@@ -98,12 +100,12 @@ of the repository.  It contains a grammar library for commonly used
 input formats.
 
 
-<a id="org91326ec"></a>
+<a id="orge1fd9b8"></a>
 
 # Input Language
 
 
-<a id="org0f6995b"></a>
+<a id="orgd8aecbf"></a>
 
 ## Productions and Expressions
 
@@ -120,7 +122,7 @@ If you've ever seen or used regular expressions, you've got a head
 start.
 
 
-<a id="org8644a5d"></a>
+<a id="orgcfb79b8"></a>
 
 ## Terminals
 
@@ -137,7 +139,7 @@ start.
     translated to `'a' / 'b' / 'c' / 'A' / 'B' / 'C'`.
 
 
-<a id="org93b29d7"></a>
+<a id="org419521f"></a>
 
 ## Non-Terminals
 
@@ -153,7 +155,7 @@ The topmost production `Signed` calls itself or the production
 recursively. (e.g.: `+-+--1` and so forth would be accepted).
 
 
-<a id="org4574f72"></a>
+<a id="org8cb0ca3"></a>
 
 ## Expression Composition
 
@@ -237,7 +239,7 @@ Non-Terminals, on top of parenthesized expressions:
 </table>
 
 
-<a id="org77a3e72"></a>
+<a id="org8a5a70e"></a>
 
 ### Ordered Choice
 
@@ -250,7 +252,7 @@ E.g.:
 Passing `6` to the above expression will generate an error.
 
 
-<a id="orgeb93c03"></a>
+<a id="org1263c2b"></a>
 
 ### Syntactic Predicates
 
@@ -265,7 +267,7 @@ parser finds the closing square bracket.
 The **and** predicate (`&`) is just syntactical sugar for `!!`.
 
 
-<a id="org0849921"></a>
+<a id="org96f387c"></a>
 
 ### Repetitions
 
@@ -279,7 +281,7 @@ The **and** predicate (`&`) is just syntactical sugar for `!!`.
 -   **Optional** will match an expression zero or one time.
 
 
-<a id="orga52c89c"></a>
+<a id="org5eaf898"></a>
 
 ### Lexification
 
@@ -383,12 +385,12 @@ There are definitely more use-cases of the lexification operator out
 there, these are just the common ones.
 
 
-<a id="org55404e7"></a>
+<a id="org87c30b1"></a>
 
 ### Error reporting with Labels
 
 
-<a id="org1ef85e7"></a>
+<a id="org8ac3884"></a>
 
 ### Import system
 
@@ -398,7 +400,7 @@ more powerful parser generated at the end.
 
     // file player.peg
     @import AddrSpec from "./rfc5322.peg"
-
+    
     Player <- "Name:" Name "," "Score:" Number "," "Email:" AddrSpec
     Name   <- [a-zA-Z ]+
     Number <- [0-9]+
@@ -406,7 +408,7 @@ more powerful parser generated at the end.
 
     // file rfc5322.peg
     // https://datatracker.ietf.org/doc/html/rfc5322#section-3.4.1
-
+    
     // ... elided for simplicity
     AddrSpec  <- LocalPart "@" Domain
     LocalPart <- DotAtom / QuotedString / ObsLocalPart
@@ -419,12 +421,12 @@ be used in other grammars using imports.  Behind the scenes, the
 `player.peg` grammar.
 
 
-<a id="org201e3a6"></a>
+<a id="org1dc0011"></a>
 
 # Generator Options
 
 
-<a id="org894b7c3"></a>
+<a id="org38456d4"></a>
 
 ## Go
 
@@ -442,7 +444,7 @@ command line:
     `NewTinyParser` constructor, etc.
 
 
-<a id="orgebfe363"></a>
+<a id="org787c96d"></a>
 
 # Roadmap
 
@@ -456,3 +458,18 @@ command line:
 -   [ ] MID: Display Call Graph for debugging purposes
 -   [ ] BIG: Bootstrap off hand written parser, so grammar writters can
     take advantage of the features baked into the parser generator
+
+
+<a id="orgdd4bd2b"></a>
+
+# Changelog
+
+
+<a id="orgc8d358a"></a>
+
+## go/v0.0.5
+
+-   [BREAKING CHANGE: Remove runtime dependencies from output parser](https://github.com/clarete/langlang/commit/fb6fdc9cf56dae3dcdd48c29ebc0ffae9c14ae9b)
+-   [BREAKING CHANGE: Overhaul naming of all the node types](https://github.com/clarete/langlang/commit/3d276aeb7e89c31f0bca6acba1174f6889f7e45c)
+-   [BUG FIX: Labels must be serched as well for recovery rules](https://github.com/clarete/langlang/commit/71c702ac3265bf80e6b5a3dd696b307a018ecc71)
+

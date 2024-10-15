@@ -295,3 +295,11 @@ command line:
  * [ ] MID: Display Call Graph for debugging purposes
  * [ ] BIG: Bootstrap off hand written parser, so grammar writters can
    take advantage of the features baked into the parser generator
+
+* Changelog
+
+** go/v0.0.5
+
+ - [[https://github.com/clarete/langlang/commit/fb6fdc9cf56dae3dcdd48c29ebc0ffae9c14ae9b][BREAKING CHANGE: Remove runtime dependencies from output parser]]
+ - [[https://github.com/clarete/langlang/commit/3d276aeb7e89c31f0bca6acba1174f6889f7e45c][BREAKING CHANGE: Overhaul naming of all the node types]]
+ - [[https://github.com/clarete/langlang/commit/71c702ac3265bf80e6b5a3dd696b307a018ecc71][BUG FIX: Labels must be serched as well for recovery rules]]
