@@ -112,10 +112,52 @@ func messagesArg(labels map[string]string) string {
 }
 
 func goDump(bt *Bytecode, labels map[string]string, input []byte) string {
+	return goDumpMode(bt, labels, input, false)
+}
+
+func goDumpMode(bt *Bytecode, labels map[string]string, input []byte, showFails bool) string {
 	vm := NewVirtualMachine(bt)
+	vm.SetShowFails(showFails)
 	vm.SetLabelMessages(bt.CompileErrorLabels(labels))
 	tree, cur, err := vm.Match(input)
 	return CanonicalDump(tree, cur, err)
+}
+
+// modes runs a comparison with show_fails off and on; the second exercises
+// the expected-hint tracking, the sexp tables and the "Expected ... but got"
+// message path on both sides.
+var modes = []struct {
+	name      string
+	showFails bool
+	args      []string
+}{
+	{"plain", false, nil},
+	{"show_fails", true, []string{"--show-fails"}},
+}
+
+// zigEdgeTests extends the VM table with the cases the Zig runtime must get
+// right byte for byte around non-ASCII input: char32/range32 operands,
+// multi-byte and truncated or invalid UTF-8 sequences, and `.` stepping
+// over garbage one byte at a time.
+var zigEdgeTests = []vmTest{
+	{Name: "Char32 match", Grammar: "G <- '🧠'", Input: "🧠"},
+	{Name: "Char32 mismatch", Grammar: "G <- '🧠'", Input: "a"},
+	{Name: "Char32 empty", Grammar: "G <- '🧠'", Input: ""},
+	{Name: "Char32 truncated", Grammar: "G <- '🧠'", Input: "\xf0\x9f"},
+	{Name: "Range32 match", Grammar: "G <- [😀-🙏]+", Input: "😀🙏😃"},
+	{Name: "Range32 mismatch", Grammar: "G <- [😀-🙏]+", Input: "😀a"},
+	{Name: "Range32 invalid lead", Grammar: "G <- [😀-🙏]+", Input: "\xff"},
+	{Name: "Two byte literal", Grammar: "G <- 'a' [b-d] 'é'", Input: "abé"},
+	{Name: "Two byte truncated", Grammar: "G <- 'a' [b-d] 'é'", Input: "ab\xc3"},
+	{Name: "Two byte wrong", Grammar: "G <- 'a' [b-d] 'é'", Input: "abe"},
+	{Name: "Any over invalid bytes", Grammar: "G <- (!'x' .)* 'x'", Input: "\xff\xfe \xc0x"},
+	{Name: "Any over overlong", Grammar: "G <- .*", Input: "a\xc0\x80b"},
+	{Name: "Surrogate is three garbage bytes", Grammar: "G <- .*", Input: "\xed\xa0\x80"},
+	{Name: "Hiragana class", Grammar: "G <- [\u3040-\u309F]+", Input: "あいう"},
+	{Name: "Hiragana class mismatch", Grammar: "G <- [\u3040-\u309F]+", Input: "あa"},
+	{Name: "Set never matches a lead byte", Grammar: "G <- [a-z]+", Input: "abcé"},
+	{Name: "Expected hints dedupe and drop whitespace", Grammar: "G <- ' ' 'a' / 'a' 'b' / [a-c]", Input: "d"},
+	{Name: "Expected hints cap at twenty", Grammar: "G <- 'a' / 'b' / 'c' / 'd' / 'e' / 'f' / 'g' / 'h' / 'i' / 'j' / 'k' / 'l' / 'm' / 'n' / 'o' / 'p' / 'q' / 'r' / 's' / 't' / 'u' / 'v' / 'w' / 'x'", Input: "z"},
 }
 
 // TestGenZigDifferential/vm replays the VM test table in its four
@@ -138,8 +180,9 @@ func TestGenZigDifferential(t *testing.T) {
 			{"NO_Charset_O0", 0, false},
 			{"NO_Charset_O1", 1, false},
 		}
+		table := append(append([]vmTest{}, vmTests...), zigEdgeTests...)
 		for _, cfgSpec := range configs {
-			for i, test := range vmTests {
+			for i, test := range table {
 				name := fmt.Sprintf("%s/%s", cfgSpec.name, test.Name)
 				t.Run(name, func(t *testing.T) {
 					cfg := NewConfig()
@@ -157,13 +200,16 @@ func TestGenZigDifferential(t *testing.T) {
 					require.NoError(t, os.WriteFile(tables, blob, 0644))
 					require.NoError(t, os.WriteFile(input, []byte(test.Input), 0644))
 
-					args := []string{"--tables", tables, "--input", input}
-					if len(test.ErrLabels) > 0 {
-						args = append(args, "--messages", messagesArg(test.ErrLabels))
+					for _, mode := range modes {
+						args := []string{"--tables", tables, "--input", input}
+						if len(test.ErrLabels) > 0 {
+							args = append(args, "--messages", messagesArg(test.ErrLabels))
+						}
+						args = append(args, mode.args...)
+						zig := runDriver(t, driver, args...)
+						expected := goDumpMode(bt, test.ErrLabels, []byte(test.Input), mode.showFails)
+						assert.Equal(t, expected, zig, "mode %s, grammar:\n%s\ninput: %q", mode.name, test.Grammar, test.Input)
 					}
-					zig := runDriver(t, driver, args...)
-					expected := goDump(bt, test.ErrLabels, []byte(test.Input))
-					assert.Equal(t, expected, zig, "grammar:\n%s\ninput: %q", test.Grammar, test.Input)
 				})
 			}
 		}
@@ -190,9 +236,12 @@ func TestGenZigDifferential(t *testing.T) {
 					t.Run(filepath.Base(path), func(t *testing.T) {
 						data, err := os.ReadFile(path)
 						require.NoError(t, err)
-						zig := runDriver(t, driver, "--input", path)
-						expected := goDump(bt, nil, data)
-						assert.Equal(t, expected, zig)
+						for _, mode := range modes {
+							args := append([]string{"--input", path}, mode.args...)
+							zig := runDriver(t, driver, args...)
+							expected := goDumpMode(bt, nil, data, mode.showFails)
+							assert.Equal(t, expected, zig, "mode %s", mode.name)
+						}
 					})
 				}
 			})

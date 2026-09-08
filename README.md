@@ -67,6 +67,7 @@ different languages.  Some are reasons why you might want to use this:
 ## Supported targets
 
 -   [X] Go Lang¹
+-   [X] Zig³
 -   [ ] Python
 -   [ ] Java Script
 -   [ ] Rust²
@@ -87,6 +88,9 @@ different languages.  Some are reasons why you might want to use this:
 2.  Rust support will be re-introduced by making Rust a target
     language only, instead of having it to be both the host and one of
     the target languages.
+
+3.  Zig parsers are generated as one self-contained file whose runtime
+    is a port of the Go virtual machine; see `go/zig/README.md`.
 
 
 <a id="basic-usage"></a>
@@ -543,6 +547,13 @@ be used in other grammars using imports.  Behind the scenes, the
 <a id="changelog"></a>
 
 # Changelog
+
+
+<a id="unreleased"></a>
+
+## Unreleased
+
+-   FEAT: `-output-language zig` generates a self-contained Zig parser (Zig 0.15.1, native and `wasm32-freestanding`, no libc) whose runtime is a port of the Go VM proven byte-identical by a Go-vs-Zig differential harness. See `go/zig/README.md`.
 
 
 <a id="gov0012"></a>

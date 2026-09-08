@@ -145,6 +145,10 @@ Tests: `go/zig/langlang_runtime_test.zig` (charset, UTF-8 decoder edge cases, tr
 
 CI: `.github/workflows/go.yml` keeps its Go 1.21–1.24 matrix (Zig tests skip). New job `zig-backend`: setup-go 1.24.x + `mlugg/setup-zig@v2` pinned to 0.15.1 (the version circ's `pr-tests.yml` pins), `cd go && LANGLANG_REQUIRE_ZIG=1 go test ./... -run 'TestGenZig'` and `cd go/zig && zig test langlang_runtime_test.zig`.
 
+## Status
+
+Phases 1–4 are implemented on `zig-parser-gen` (commits `9bc0880`, `c65c999`, `47b7368`, and the Phase 4 commit). The differential harness runs the VM test table in four configurations plus non-ASCII edge cases, every test grammar including the left-recursive one, and the LR entry path, with expected-hint tracking off and on: 484 cases, byte-identical. Phase 5 (CI job, wasm smoke, the circ hand-over checklist) is next.
+
 ## Phases
 
 Each phase is independently shippable with its proof command; small commits on `zig-parser-gen`.

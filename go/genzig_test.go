@@ -182,6 +182,23 @@ func TestGenZigCompiles(t *testing.T) {
 			runZig(t, dir, "build-obj", "-target", "wasm32-freestanding", "-O", "ReleaseSmall", "parser.zig")
 		})
 	}
+	t.Run("source-map", func(t *testing.T) {
+		dir := t.TempDir()
+		g := zigGrammars[2]
+		cfg := zigTestConfig()
+		g.setup(cfg)
+		cfg.SetBool("vm.debug.source_map", true)
+		db := NewDatabase(cfg, NewRelativeImportLoader())
+		program, err := QueryProgram(db, g.path)
+		require.NoError(t, err)
+		out, err := GenZigEval(program, cfg, GenZigOptions{SourceFile: g.path})
+		require.NoError(t, err)
+		require.Contains(t, out, ".srcm = &runtime.SourceMap{", "the source map must be emitted when the grammar was compiled with vm.debug.source_map")
+		require.Contains(t, out, ".files = &[_][]const u8{")
+		require.NoError(t, os.WriteFile(filepath.Join(dir, "parser.zig"), []byte(out), 0644))
+		runZig(t, dir, "fmt", "--check", "parser.zig")
+		runZig(t, dir, "test", "parser.zig")
+	})
 	t.Run("runtime-import", func(t *testing.T) {
 		dir := t.TempDir()
 		out := compileZigGrammar(t, zigGrammars[2], GenZigOptions{RuntimeImport: "langlang_runtime.zig"})
