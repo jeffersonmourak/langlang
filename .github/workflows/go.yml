@@ -32,3 +32,29 @@ jobs:
       - name: Build
         working-directory: ./go
         run: go test -v ./...
+
+  # The Zig backend's tests skip when no toolchain is on PATH, so the Go
+  # matrix above stays green without Zig; this job installs the pinned
+  # Zig and makes those tests mandatory.
+  zig-backend:
+    runs-on: ubuntu-latest
+    env:
+      ZIG_VERSION: 0.15.1
+    steps:
+      - uses: actions/checkout@v4
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.24.x'
+      - name: Install Zig
+        uses: mlugg/setup-zig@v2
+        with:
+          version: ${{ env.ZIG_VERSION }}
+      - name: Runtime unit tests
+        working-directory: ./go/zig
+        run: zig test langlang_runtime_test.zig
+      - name: Generated parser and differential tests
+        working-directory: ./go
+        env:
+          LANGLANG_REQUIRE_ZIG: "1"
+        run: go test -v -run 'TestZig|TestGenZig' ./

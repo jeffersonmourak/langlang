@@ -1,0 +1,37 @@
+Program     <- (Annotation / ImportDecl / InputDecl / Declaration / Connection / RecoverLine)* EndOfInput
+EndOfInput  <- (!.)^trailing
+RecoverLine <- (![\n] .)+
+Annotation  <- '//' (![\n] .)*
+
+ImportDecl  <- 'import' Identifier '"' (!["] .)* '"'
+
+InputDecl   <- 'input' ParamIntro? WidthAnnot? IdentList
+ParamIntro  <- '<' Identifier (',' Identifier)* '>'
+
+Declaration <- (ComponentType WidthAnnot? Identifier CallWidths? BusType) / (ComponentType WidthAnnot? IdentList)
+AnonDecl    <- (ComponentType BusType)
+ComponentType    <- 'output' / 'bus' / 'led' / 'and' / 'or' / 'not' / 'xor' / 'nand' / Identifier
+WidthAnnot  <- '[' WidthArg ']'
+CallWidths  <- '[' WidthArg (',' WidthArg)* ']'
+WidthArg    <- Integer / Identifier
+Integer     <- [0-9]+
+Identifier  <- [a-zA-Z_][a-zA-Z0-9_]*
+PortRef     <- Concat / IndexedRef
+Concat      <- '{' PortRef (',' PortRef)* '}'
+IndexedRef  <- BaseRef #Subscript?
+Subscript   <- '[' Integer '..' Integer ']' / '[' Integer ']'
+BaseRef     <- (AnonDecl '.' Identifier) / (Identifier ('.' Identifier)?)
+IdentList   <- Identifier (',' Identifier)*
+BusType     <- '(' Identifier^busname '='^busassign PortRef^busvalue (',' Identifier^busname '='^busassign PortRef^busvalue)* ')'^busclose
+
+Connection  <- PortRef '<>' PortRef
+
+// Recovery rules: productions named after the throw labels above. When a
+// label fires, the parser runs the matching production to resync (skip to
+// the end of the line), emits an error node, and continues instead of
+// aborting. busclose recovers in place (the ')' is simply missing).
+trailing    <- (![\n] .)*
+busname     <- (![\n] .)*
+busassign   <- (![\n] .)*
+busvalue    <- (![\n] .)*
+busclose    <-

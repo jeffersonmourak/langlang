@@ -1,0 +1,3 @@
+input<W>[W] a
+and[W] g(a=a, b=a)
+output[W] o(in={ a[0..2], g.out[1] })

@@ -31,7 +31,13 @@ var zigGrammars = []zigGrammar{
 	{name: "import", path: "tests/import/import_gr_expr.peg"},
 	{name: "json", path: "../grammars/json.peg"},
 	{name: "langlang", path: "../grammars/langlang.peg"},
+	// circ-compiler's grammar (lib/grammar/proto-circ.peg), vendored with
+	// its inline test inputs so the consumer's shape is covered here.
+	{name: "circ", path: "tests/circ/circ.peg", setup: disableCaptureSpaces},
 }
+
+// circGrammar is the zigGrammars entry for circ-compiler's grammar.
+func circGrammar() zigGrammar { return zigGrammars[len(zigGrammars)-1] }
 
 // zigTestConfig mirrors the defaults cmd/langlang sets before a grammar
 // specific setup runs.
@@ -206,6 +212,31 @@ func TestGenZigCompiles(t *testing.T) {
 		require.NoError(t, os.WriteFile(filepath.Join(dir, "langlang_runtime.zig"), ZigRuntimeSource(), 0644))
 		runZig(t, dir, "fmt", "--check", "parser.zig")
 		runZig(t, dir, "test", "parser.zig")
+	})
+	t.Run("circ-shape", func(t *testing.T) {
+		// The accessor surface circ-compiler's translate.zig consumes.
+		dir := t.TempDir()
+		out := compileZigGrammar(t, circGrammar(), GenZigOptions{})
+		require.NoError(t, os.WriteFile(filepath.Join(dir, "parser.zig"), []byte(out), 0644))
+		shape, err := os.ReadFile(filepath.Join("zig", "testdata", "circ_shape_test.zig"))
+		require.NoError(t, err)
+		require.NoError(t, os.WriteFile(filepath.Join(dir, "circ_shape_test.zig"), shape, 0644))
+		runZig(t, dir, "test", "circ_shape_test.zig")
+	})
+	t.Run("wasm-smoke", func(t *testing.T) {
+		// The generated circ parser linked into a freestanding wasm32
+		// module with no libc; the size is logged for the record.
+		dir := t.TempDir()
+		out := compileZigGrammar(t, circGrammar(), GenZigOptions{})
+		require.NoError(t, os.WriteFile(filepath.Join(dir, "parser.zig"), []byte(out), 0644))
+		entry, err := os.ReadFile(filepath.Join("zig", "testdata", "wasm_entry.zig"))
+		require.NoError(t, err)
+		require.NoError(t, os.WriteFile(filepath.Join(dir, "wasm_entry.zig"), entry, 0644))
+		runZig(t, dir, "build-exe", "wasm_entry.zig", "-target", "wasm32-freestanding", "-O", "ReleaseSmall", "-fno-entry", "--export=parse", "--export=alloc")
+		info, err := os.Stat(filepath.Join(dir, "wasm_entry.wasm"))
+		require.NoError(t, err)
+		t.Logf("wasm32-freestanding ReleaseSmall module for the circ grammar: %d bytes", info.Size())
+		require.Less(t, info.Size(), int64(256*1024), "the generated parser should stay far under 256 KiB")
 	})
 	t.Run("runtime-unit-tests", func(t *testing.T) {
 		runZig(t, "zig", "fmt", "--check", "langlang_runtime.zig", "langlang_runtime_test.zig")

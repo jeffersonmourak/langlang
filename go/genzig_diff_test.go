@@ -282,6 +282,124 @@ func TestGenZigLeftRecursiveEntry(t *testing.T) {
 	}
 }
 
+// TestGenZigDifferential/corpus is the hook for an external grammar and
+// corpus, driven by environment variables so it can run against a
+// consumer's checkout (see zig/scripts/diff-circ.sh):
+//
+//	LANGLANG_DIFF_GRAMMAR  path to the .peg (required; the test skips otherwise)
+//	LANGLANG_DIFF_FLAGS    space-separated langlang flags: -disable-capture-spaces,
+//	                       -disable-captures, -disable-charsets, -disable-spaces,
+//	                       -disable-builtins, -disable-inline, -disable-inline-defs=false
+//	LANGLANG_DIFF_CORPUS   glob of input files (required)
+//	LANGLANG_DIFF_LABELS   "label=message;label=message" bound on both sides
+func TestGenZigDifferentialCorpus(t *testing.T) {
+	grammar := os.Getenv("LANGLANG_DIFF_GRAMMAR")
+	corpus := os.Getenv("LANGLANG_DIFF_CORPUS")
+	if grammar == "" || corpus == "" {
+		t.Skip("set LANGLANG_DIFF_GRAMMAR and LANGLANG_DIFF_CORPUS to run the external corpus")
+	}
+	requireZig(t)
+	cfg := zigTestConfig()
+	for _, flag := range strings.Fields(os.Getenv("LANGLANG_DIFF_FLAGS")) {
+		switch flag {
+		case "-disable-capture-spaces":
+			cfg.SetBool("grammar.capture_spaces", false)
+		case "-disable-captures":
+			cfg.SetBool("grammar.captures", false)
+		case "-disable-charsets":
+			cfg.SetBool("grammar.add_charsets", false)
+		case "-disable-spaces":
+			cfg.SetBool("grammar.handle_spaces", false)
+		case "-disable-builtins":
+			cfg.SetBool("grammar.add_builtins", false)
+		case "-disable-inline":
+			cfg.SetBool("compiler.inline.enabled", false)
+		case "-disable-inline-defs=false":
+			cfg.SetBool("compiler.inline.emit.inlined", true)
+		default:
+			t.Fatalf("unsupported flag in LANGLANG_DIFF_FLAGS: %q", flag)
+		}
+	}
+	labels := map[string]string{}
+	for _, pair := range strings.Split(os.Getenv("LANGLANG_DIFF_LABELS"), ";") {
+		if eq := strings.IndexByte(pair, '='); eq > 0 {
+			labels[pair[:eq]] = pair[eq+1:]
+		}
+	}
+	inputs, err := filepath.Glob(corpus)
+	require.NoError(t, err)
+	require.NotEmpty(t, inputs, "no inputs match %s", corpus)
+	sort.Strings(inputs)
+
+	g := zigGrammar{name: "corpus", path: grammar, setup: func(c *Config) { *c = *cfg }}
+	db := NewDatabase(cfg, NewRelativeImportLoader())
+	bt, err := QueryBytecode(db, grammar)
+	require.NoError(t, err)
+	driver := buildParserDriver(t, g)
+	var msgArgs []string
+	if len(labels) > 0 {
+		msgArgs = []string{"--messages", messagesArg(labels)}
+	}
+	for _, path := range inputs {
+		path := path
+		t.Run(filepath.Base(path), func(t *testing.T) {
+			data, err := os.ReadFile(path)
+			require.NoError(t, err)
+			for _, mode := range modes {
+				args := append(append([]string{"--input", path}, msgArgs...), mode.args...)
+				zig := runDriver(t, driver, args...)
+				expected := goDumpMode(bt, labels, data, mode.showFails)
+				assert.Equal(t, expected, zig, "mode %s", mode.name)
+			}
+		})
+	}
+}
+
+// TestGenZigTablesMatchVendoredGo checks that the Zig backend emits the
+// same `code` bytes a consumer already vendors in a Go parser generated
+// from the same grammar: set CIRC_PARSER_GO to circ-compiler's
+// lib/parser/parser.go (its grammar is vendored as tests/circ/circ.peg).
+func TestGenZigTablesMatchVendoredGo(t *testing.T) {
+	path := os.Getenv("CIRC_PARSER_GO")
+	if path == "" {
+		t.Skip("set CIRC_PARSER_GO to the vendored parser.go to compare tables")
+	}
+	src, err := os.ReadFile(path)
+	require.NoError(t, err)
+	vendored := goByteLiteral(t, string(src), "code: []byte{")
+
+	g := circGrammar()
+	cfg := zigTestConfig()
+	g.setup(cfg)
+	db := NewDatabase(cfg, NewRelativeImportLoader())
+	bt, err := QueryBytecode(db, g.path)
+	require.NoError(t, err)
+	assert.Equal(t, vendored, bt.code, "the Go and Zig backends must share one Encode() output")
+}
+
+// goByteLiteral parses the decimal bytes of a `field: []byte{ ... }`
+// literal out of Go source.
+func goByteLiteral(t *testing.T, src, marker string) []byte {
+	t.Helper()
+	start := strings.Index(src, marker)
+	require.GreaterOrEqual(t, start, 0, "marker %q not found", marker)
+	start += len(marker)
+	end := strings.Index(src[start:], "}")
+	require.GreaterOrEqual(t, end, 0)
+	var out []byte
+	for _, tok := range strings.Split(src[start:start+end], ",") {
+		tok = strings.TrimSpace(tok)
+		if tok == "" {
+			continue
+		}
+		var b int
+		_, err := fmt.Sscanf(tok, "%d", &b)
+		require.NoError(t, err, "token %q", tok)
+		out = append(out, byte(b))
+	}
+	return out
+}
+
 // grammarInputs lists the corpus for a grammar: tests/<name>/inputs/*
 // when present, plus the langlang grammars themselves for the langlang
 // grammar and the smallest checked-in JSON document for json.

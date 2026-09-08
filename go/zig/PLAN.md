@@ -147,7 +147,7 @@ CI: `.github/workflows/go.yml` keeps its Go 1.21–1.24 matrix (Zig tests skip).
 
 ## Status
 
-Phases 1–4 are implemented on `zig-parser-gen` (commits `9bc0880`, `c65c999`, `47b7368`, and the Phase 4 commit). The differential harness runs the VM test table in four configurations plus non-ASCII edge cases, every test grammar including the left-recursive one, and the LR entry path, with expected-hint tracking off and on: 484 cases, byte-identical. Phase 5 (CI job, wasm smoke, the circ hand-over checklist) is next.
+All five phases are implemented on `zig-parser-gen` (`9bc0880`, `c65c999`, `47b7368`, `91dd896`, and the Phase 5 commit). The differential harness runs the VM test table in four configurations plus non-ASCII edge cases, every test grammar including the left-recursive one and circ's, and the LR entry path, with expected-hint tracking off and on: 493 cases, byte-identical; `zig/scripts/diff-circ.sh` adds circ-compiler's 144 fixtures and the vendored-table check. The `zig-backend` CI job pins Zig 0.15.1 and makes the Zig tests mandatory. The generated circ parser links into an 18 KB freestanding wasm32 module. `CIRC.md` is the hand-over checklist; the switch itself happens in circ's libcirc initiative.
 
 ## Phases
 
