@@ -3,7 +3,7 @@ package langlang
 import (
 	"fmt"
 
-	"github.com/clarete/langlang/go/ascii"
+	"github.com/jeffersonmourak/langlang/go/ascii"
 )
 
 type AstFormatToken int

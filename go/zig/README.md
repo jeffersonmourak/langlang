@@ -8,9 +8,20 @@ addresses. It compiles with Zig 0.15.1 for native targets and for
 trees, byte spans, error-recovery nodes and error messages byte for byte.
 
 ```sh
+go install github.com/jeffersonmourak/langlang/go/cmd/langlang@v0.0.13-zig.1   # or @zig-parser-gen for the branch head
 langlang -grammar my.peg -output-language zig -output-path parser.zig
 zig test parser.zig          # runs the emitted table check
 ```
+
+This fork's Go module is `github.com/jeffersonmourak/langlang/go` so that
+`go install` can fetch it directly (`go install` refuses a module whose
+declared path differs from the requested one); releases are tagged
+`go/vX.Y.Z-zig.N` on the nested module, installed as `@vX.Y.Z-zig.N`. The
+Go backend is unchanged, so the same binary regenerates existing Go
+parsers byte for byte (only the header's commit hash differs). Upstreaming
+means reverting the module path in `go/go.mod`, the imports under `go/`,
+`benchmarks/`, and `js/wasm/lib/`, which is a mechanical
+`github.com/jeffersonmourak/langlang/go` → `github.com/clarete/langlang/go`.
 
 ## Files
 

@@ -9,8 +9,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/clarete/langlang/go"
-	"github.com/clarete/langlang/go/ascii"
+	"github.com/jeffersonmourak/langlang/go"
+	"github.com/jeffersonmourak/langlang/go/ascii"
 )
 
 var theme = ascii.DefaultTheme

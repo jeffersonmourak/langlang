@@ -197,6 +197,10 @@ Each phase is independently shippable with its proof command; small commits on `
 - The header commit hash is `unknown` under `go run`; the runtime sha256 line is the reliable skew signal.
 - `.github/workflows/go.yml` has no Zig; an unguarded Zig-requiring test breaks the 1.21–1.24 matrix; generated `.zig` outputs must be gitignored like the `.go` ones.
 
+## Distribution
+
+The fork's Go module path is `github.com/jeffersonmourak/langlang/go` (renamed from upstream's, in `go/go.mod` and the imports under `go/`, `benchmarks/` and `js/wasm/lib/`) so `go install github.com/jeffersonmourak/langlang/go/cmd/langlang@<version>` works; versions are tags of the form `go/vX.Y.Z-zig.N` on the nested module. The upstream PR reverts the rename mechanically.
+
 ## Out of scope
 
 Porting `pos.go`/`Pretty` parity; any encoder/ABI change; fixing Go VM quirks on the Go side; grammar/compiler-level fixes (`a [2]` lexification, the recovery-precedence TODO); the LIFO memo folding and benchmarks; executing the circ cut-over (specified here, done in libcirc); a wasm host ABI for the parser inside circ (only a freestanding compile smoke); the upstream PR to `clarete/langlang` (flags mirror the `-go-*` convention so it stays mechanical); a `build.zig.zon` package for the runtime.
