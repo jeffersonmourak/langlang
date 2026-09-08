@@ -329,7 +329,7 @@ func (g *zigEvalEmitter) writeRules(asm *Program) {
 }
 
 func (g *zigEvalEmitter) writeParserAlias() {
-	g.out.writel("pub const Parser = runtime.Parser(bytecode, Rule, &left_recursive_rules);")
+	g.out.writel("pub const Parser = runtime.Interpreter(bytecode, Rule, &left_recursive_rules);")
 	g.out.writel("")
 }
 

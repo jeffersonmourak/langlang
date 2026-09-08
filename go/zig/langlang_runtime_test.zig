@@ -68,12 +68,12 @@ const Rule = enum(u16) { G = 5 };
 const TinyParser = rt.Interpreter(tiny, Rule, &[_]Rule{});
 
 test "Parser resolves labels by name and stores messages" {
-    var p = TinyParser.init(std.testing.allocator);
+    var p = try TinyParser.init(std.testing.allocator);
     defer p.deinit();
     try std.testing.expectEqual(@as(?u16, 1), TinyParser.labelId("G"));
     try std.testing.expectEqual(@as(?u16, null), TinyParser.labelId("nope"));
     p.setLabelMessages(&.{ .{ .label = "G", .message = "expected a G" }, .{ .label = "nope", .message = "ignored" } });
-    try std.testing.expectEqualStrings("expected a G", p.messages[1].?);
+    try std.testing.expectEqualStrings("expected a G", p.messages()[1].?);
     try std.testing.expectEqual(@as(u16, 5), TinyParser.ruleAddress(.G));
     try std.testing.expect(!TinyParser.isLeftRecursive(.G));
 }
@@ -135,4 +135,72 @@ test "Tree accessors and dump on a hand-built tree" {
     t.reset();
     try std.testing.expectEqual(@as(?rt.NodeId, null), t.root());
     try std.testing.expectEqual(@as(usize, 4), c.len());
+}
+
+test "decodeRune follows Go's utf8.DecodeRune contract" {
+    const D = rt.Decoded;
+    try std.testing.expectEqual(D{ .rune = 'a', .size = 1 }, rt.decodeRune("a", 0));
+    try std.testing.expectEqual(D{ .rune = 0xE9, .size = 2 }, rt.decodeRune("\xc3\xa9", 0));
+    try std.testing.expectEqual(D{ .rune = 0x3042, .size = 3 }, rt.decodeRune("あ", 0));
+    try std.testing.expectEqual(D{ .rune = 0x1F9E0, .size = 4 }, rt.decodeRune("🧠", 0));
+    // invalid lead, truncated, overlong, surrogate, out of range: (U+FFFD, 1)
+    try std.testing.expectEqual(D{ .rune = 0xFFFD, .size = 1 }, rt.decodeRune("\xff", 0));
+    try std.testing.expectEqual(D{ .rune = 0xFFFD, .size = 1 }, rt.decodeRune("\x80", 0));
+    try std.testing.expectEqual(D{ .rune = 0xFFFD, .size = 1 }, rt.decodeRune("\xe3\x81", 0));
+    try std.testing.expectEqual(D{ .rune = 0xFFFD, .size = 1 }, rt.decodeRune("\xc0\x80", 0));
+    try std.testing.expectEqual(D{ .rune = 0xFFFD, .size = 1 }, rt.decodeRune("\xed\xa0\x80", 0));
+    try std.testing.expectEqual(D{ .rune = 0xFFFD, .size = 1 }, rt.decodeRune("\xf4\x90\x80\x80", 0));
+    // a literal U+FFFD decodes as itself, size 3
+    try std.testing.expectEqual(D{ .rune = 0xFFFD, .size = 3 }, rt.decodeRune("\xef\xbf\xbd", 0));
+}
+
+test "Machine matches the tiny program and reports failures like Go" {
+    var m = try rt.Machine.init(std.testing.allocator, &tiny);
+    defer m.deinit();
+
+    const ok = try m.match("a");
+    try std.testing.expect(ok.err == null);
+    try std.testing.expectEqual(@as(u32, 1), ok.cursor);
+    const t = ok.tree.?;
+    const r = t.root().?;
+    try std.testing.expectEqual(rt.NodeType.node, t.typ(r));
+    try std.testing.expectEqualStrings("G", t.name(r));
+    try std.testing.expectEqual(rt.NodeType.string, t.typ(t.child(r).?));
+    try std.testing.expectEqualStrings("a", t.slice(t.child(r).?));
+
+    const bad = try m.match("b");
+    try std.testing.expect(bad.err != null);
+    try std.testing.expect(bad.tree != null);
+    try std.testing.expectEqual(@as(?u32, 'b'), bad.err.?.unexpected);
+    try std.testing.expectEqual(@as(i32, 0), bad.err.?.end);
+    try std.testing.expect(bad.tree.?.root() == null);
+
+    const empty = try m.match("");
+    try std.testing.expect(empty.err != null);
+    try std.testing.expect(empty.err.?.unexpected == null);
+
+    try std.testing.expectError(error.ParseFailed, m.parse("b"));
+    try std.testing.expectEqual(@as(u32, 0), m.last_error.start);
+}
+
+test "Stack windows: capture, popAndCapture adoption, collectCaptures, truncate" {
+    const gpa = std.testing.allocator;
+    var s: rt.Stack = .{};
+    defer s.deinit(gpa);
+    try s.push(gpa, .{ .kind = .capture, .cap_id = 1 });
+    try s.push(gpa, .{ .kind = .capture, .cap_id = 2 });
+    try s.capture(gpa, 10);
+    try s.capture(gpa, 11);
+    try std.testing.expectEqualSlices(rt.NodeId, &.{ 10, 11 }, s.frameNodes(s.top().*));
+    const inner = (try s.popAndCapture(gpa)).?;
+    try std.testing.expectEqual(@as(u32, 2), inner.cap_id);
+    try std.testing.expectEqualSlices(rt.NodeId, &.{ 10, 11 }, s.frameNodes(s.top().*));
+    s.truncateArena(s.top().nodes_start);
+    try std.testing.expectEqual(@as(usize, 0), s.node_arena.items.len);
+    try s.capture(gpa, 12);
+    try s.collectCaptures(gpa);
+    try std.testing.expectEqualSlices(rt.NodeId, &.{12}, s.nodes.items);
+    _ = try s.popAndCapture(gpa);
+    try std.testing.expectEqual(@as(usize, 0), s.len());
+    try std.testing.expect(s.pop() == null);
 }

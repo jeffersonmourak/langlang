@@ -89,8 +89,40 @@ pub const Charset = struct {
 /// A precomputed hint for error messages: a single code point when `b == 0`,
 /// otherwise the inclusive range `a-b`.
 pub const Expected = struct {
-    a: u21,
-    b: u21 = 0,
+    a: u32,
+    b: u32 = 0,
+};
+
+pub const expected_limit = 20;
+
+/// The hints collected while `show_fails` is on (go/vm.go `expectedInfo`):
+/// at most 20, deduplicated, whitespace and NUL single-char hints dropped.
+pub const ExpectedInfo = struct {
+    count: u8 = 0,
+    arr: [expected_limit]Expected = undefined,
+
+    pub fn clear(self: *ExpectedInfo) void {
+        self.count = 0;
+    }
+
+    pub fn add(self: *ExpectedInfo, e: Expected) void {
+        if (self.count == expected_limit) return;
+        if (e.b == 0) {
+            switch (e.a) {
+                0, ' ', '\n', '\r', '\t' => return,
+                else => {},
+            }
+        }
+        for (self.arr[0..self.count]) |x| {
+            if (x.a == e.a and x.b == e.b) return;
+        }
+        self.arr[self.count] = e;
+        self.count += 1;
+    }
+
+    pub fn items(self: *const ExpectedInfo) []const Expected {
+        return self.arr[0..self.count];
+    }
 };
 
 /// Grammar source map, emitted only with `--grammar-source-map`.
@@ -331,6 +363,55 @@ pub const Tree = struct {
         return out;
     }
 
+    // Builders, 1:1 with go/tree.go so node ids come out in the same order.
+
+    pub fn addString(t: *Tree, gpa: std.mem.Allocator, start: u32, end: u32) std.mem.Allocator.Error!NodeId {
+        const id: NodeId = @intCast(t.nodes.items.len);
+        try t.nodes.append(gpa, .{ .typ = .string, .start = start, .end = end });
+        return id;
+    }
+
+    pub fn addSequence(t: *Tree, gpa: std.mem.Allocator, kids: []const NodeId, start: u32, end: u32) std.mem.Allocator.Error!NodeId {
+        const id: NodeId = @intCast(t.nodes.items.len);
+        var child_range_id: i32 = -1;
+        if (kids.len > 0) {
+            child_range_id = @intCast(t.child_ranges.items.len);
+            const child_start: u32 = @intCast(t.children.items.len);
+            try t.children.appendSlice(gpa, kids);
+            const child_end: u32 = @intCast(t.children.items.len);
+            try t.child_ranges.append(gpa, .{ .start = child_start, .end = child_end });
+        }
+        try t.nodes.append(gpa, .{ .typ = .sequence, .start = start, .end = end, .child_id = child_range_id });
+        return id;
+    }
+
+    pub fn addNode(t: *Tree, gpa: std.mem.Allocator, name_id: i32, kid: NodeId, start: u32, end: u32) std.mem.Allocator.Error!NodeId {
+        const id: NodeId = @intCast(t.nodes.items.len);
+        try t.nodes.append(gpa, .{ .typ = .node, .start = start, .end = end, .name_id = name_id, .child_id = @intCast(kid) });
+        return id;
+    }
+
+    /// A string node wrapped in a named node, appended in that order
+    /// (go/tree.go AddNamedString); returns the named node.
+    pub fn addNamedString(t: *Tree, gpa: std.mem.Allocator, name_id: i32, start: u32, end: u32) std.mem.Allocator.Error!NodeId {
+        const string_id: NodeId = @intCast(t.nodes.items.len);
+        try t.nodes.append(gpa, .{ .typ = .string, .start = start, .end = end });
+        try t.nodes.append(gpa, .{ .typ = .node, .start = start, .end = end, .name_id = name_id, .child_id = @intCast(string_id) });
+        return string_id + 1;
+    }
+
+    pub fn addError(t: *Tree, gpa: std.mem.Allocator, label_id: i32, message_id: i32, start: u32, end: u32) std.mem.Allocator.Error!NodeId {
+        const id: NodeId = @intCast(t.nodes.items.len);
+        try t.nodes.append(gpa, .{ .typ = .err, .start = start, .end = end, .name_id = label_id, .message_id = message_id });
+        return id;
+    }
+
+    pub fn addErrorWithChild(t: *Tree, gpa: std.mem.Allocator, label_id: i32, message_id: i32, kid: NodeId, start: u32, end: u32) std.mem.Allocator.Error!NodeId {
+        const id: NodeId = @intCast(t.nodes.items.len);
+        try t.nodes.append(gpa, .{ .typ = .err, .start = start, .end = end, .name_id = label_id, .child_id = @intCast(kid), .message_id = message_id });
+        return id;
+    }
+
     /// Canonical pre-order dump used by the Go-vs-Zig differential harness:
     /// `root=<id>` then one line per node, `<2*depth spaces>#<id> <type> <name or -> <start> <end>`,
     /// with ` msg=<message>` appended to `err` lines; `noroot` when there is
@@ -344,8 +425,10 @@ pub const Tree = struct {
     fn dumpNode(t: *const Tree, w: *std.Io.Writer, id: NodeId, depth: usize) std.Io.Writer.Error!void {
         try w.splatByteAll(' ', depth * 2);
         const n = t.nodes.items[id];
-        const nm = t.name(id);
-        try w.print("#{d} {s} {s} {d} {d}", .{ id, @tagName(n.typ), if (nm.len == 0) "-" else nm, n.start, n.end });
+        // `-` only for "no name"; string id 0 is a real (empty) name and
+        // prints as such, matching go/tree_canonical.go.
+        const nm: []const u8 = if (n.name_id < 0) "-" else t.strs[@intCast(n.name_id)];
+        try w.print("#{d} {s} {s} {d} {d}", .{ id, @tagName(n.typ), nm, n.start, n.end });
         if (n.typ == .err) try w.print(" msg={s}", .{t.message(id)});
         try w.writeByte('\n');
         var i: usize = 0;
@@ -371,12 +454,12 @@ pub const ParseError = struct {
     label_id: u32 = 0,
     /// Cursor where the failure was reported.
     start: u32 = 0,
-    /// Furthest failure position.
-    end: u32 = 0,
+    /// Furthest failure position, -1 when nothing had failed yet.
+    end: i32 = -1,
     /// Bytecode address of the furthest failure.
     ffp_pc: u32 = 0,
     /// The code point at the failure, or null at end of input.
-    unexpected: ?u21 = null,
+    unexpected: ?u32 = null,
     /// Hints collected while `show_fails` was on (at most 20).
     expected: []const Expected = &.{},
 
@@ -422,9 +505,10 @@ pub const ParseError = struct {
     }
 };
 
-fn writeRune(w: *std.Io.Writer, r: u21) std.Io.Writer.Error!void {
+fn writeRune(w: *std.Io.Writer, r: u32) std.Io.Writer.Error!void {
     var buf: [4]u8 = undefined;
-    const n = std.unicode.utf8Encode(r, &buf) catch {
+    const r21: u21 = if (r > 0x10FFFF) 0xFFFD else @intCast(r);
+    const n = std.unicode.utf8Encode(r21, &buf) catch {
         // Go writes the replacement character for an invalid rune.
         return w.writeAll("\u{FFFD}");
     };
@@ -442,7 +526,655 @@ pub const MatchResult = struct {
 pub const Error = error{ ParseFailed, OutOfMemory, InvalidBytecode };
 
 // ---------------------------------------------------------------------------
-// Parser
+// UTF-8
+// ---------------------------------------------------------------------------
+
+pub const Decoded = struct {
+    rune: u32,
+    size: u8,
+};
+
+/// Go's `utf8.DecodeRune` contract as the VM uses it (go/vm.go decodeRune):
+/// an ASCII fast path, otherwise a well-formed 2-4 byte sequence, and
+/// (U+FFFD, 1) for anything invalid, truncated, overlong, or a surrogate,
+/// so the cursor always advances by at least one byte.
+pub fn decodeRune(data: []const u8, offset: usize) Decoded {
+    const invalid: Decoded = .{ .rune = 0xFFFD, .size = 1 };
+    const b0 = data[offset];
+    if (b0 < 0x80) return .{ .rune = b0, .size = 1 };
+    const rest = data.len - offset;
+    if (b0 < 0xC2) return invalid;
+    if (b0 < 0xE0) {
+        if (rest < 2) return invalid;
+        const b1 = data[offset + 1];
+        if (b1 < 0x80 or b1 > 0xBF) return invalid;
+        return .{ .rune = (@as(u32, b0 & 0x1F) << 6) | (b1 & 0x3F), .size = 2 };
+    }
+    if (b0 < 0xF0) {
+        if (rest < 3) return invalid;
+        const b1 = data[offset + 1];
+        const lo: u8 = if (b0 == 0xE0) 0xA0 else 0x80;
+        const hi: u8 = if (b0 == 0xED) 0x9F else 0xBF;
+        if (b1 < lo or b1 > hi) return invalid;
+        const b2 = data[offset + 2];
+        if (b2 < 0x80 or b2 > 0xBF) return invalid;
+        return .{ .rune = (@as(u32, b0 & 0x0F) << 12) | (@as(u32, b1 & 0x3F) << 6) | (b2 & 0x3F), .size = 3 };
+    }
+    if (b0 < 0xF5) {
+        if (rest < 4) return invalid;
+        const b1 = data[offset + 1];
+        const lo: u8 = if (b0 == 0xF0) 0x90 else 0x80;
+        const hi: u8 = if (b0 == 0xF4) 0x8F else 0xBF;
+        if (b1 < lo or b1 > hi) return invalid;
+        const b2 = data[offset + 2];
+        if (b2 < 0x80 or b2 > 0xBF) return invalid;
+        const b3 = data[offset + 3];
+        if (b3 < 0x80 or b3 > 0xBF) return invalid;
+        return .{ .rune = (@as(u32, b0 & 0x07) << 18) | (@as(u32, b1 & 0x3F) << 12) | (@as(u32, b2 & 0x3F) << 6) | (b3 & 0x3F), .size = 4 };
+    }
+    return invalid;
+}
+
+// ---------------------------------------------------------------------------
+// Stack
+// ---------------------------------------------------------------------------
+
+pub const FrameKind = enum(u8) {
+    backtracking,
+    call,
+    capture,
+    lr_call,
+};
+
+/// One frame for all four kinds (go/vm_stack.go). `nodes_start..nodes_end`
+/// is this frame's window into the shared node arena.
+pub const Frame = struct {
+    cursor: u32 = 0,
+    pc: u32 = 0,
+    cap_id: u32 = 0,
+    nodes_start: u32 = 0,
+    nodes_end: u32 = 0,
+    kind: FrameKind,
+    predicate: bool = false,
+    /// 1-based index into `Stack.lr_data`; 0 for non-LR frames.
+    lr_idx: u32 = 0,
+};
+
+pub const lr_result_left_rec: i32 = -1;
+
+pub const LrFrameData = struct {
+    address: u32,
+    precedence: u8,
+    result: i32,
+    committed_end: u32,
+};
+
+pub const Stack = struct {
+    frames: std.ArrayList(Frame) = .empty,
+    /// Captures of every live frame, in frame order.
+    node_arena: std.ArrayList(NodeId) = .empty,
+    /// Top-level captures (made while no frame is on the stack).
+    nodes: std.ArrayList(NodeId) = .empty,
+    lr_data: std.ArrayList(LrFrameData) = .empty,
+
+    pub fn deinit(s: *Stack, gpa: std.mem.Allocator) void {
+        s.frames.deinit(gpa);
+        s.node_arena.deinit(gpa);
+        s.nodes.deinit(gpa);
+        s.lr_data.deinit(gpa);
+        s.* = .{};
+    }
+
+    pub fn reset(s: *Stack) void {
+        s.frames.clearRetainingCapacity();
+        s.node_arena.clearRetainingCapacity();
+        s.nodes.clearRetainingCapacity();
+        s.lr_data.clearRetainingCapacity();
+    }
+
+    pub fn len(s: *const Stack) usize {
+        return s.frames.items.len;
+    }
+
+    /// The frame's arena window always starts at the current arena end.
+    pub fn push(s: *Stack, gpa: std.mem.Allocator, f: Frame) std.mem.Allocator.Error!void {
+        var frame = f;
+        frame.nodes_start = @intCast(s.node_arena.items.len);
+        frame.nodes_end = frame.nodes_start;
+        try s.frames.append(gpa, frame);
+    }
+
+    pub fn pop(s: *Stack) ?Frame {
+        return s.frames.pop();
+    }
+
+    /// Pointer into `frames`; valid only until the next `push`.
+    pub fn top(s: *Stack) *Frame {
+        return &s.frames.items[s.frames.items.len - 1];
+    }
+
+    pub fn frameNodes(s: *const Stack, f: Frame) []const NodeId {
+        return s.node_arena.items[f.nodes_start..f.nodes_end];
+    }
+
+    /// Adds a node to the top frame, or to the top-level list when the
+    /// stack is empty.
+    pub fn capture(s: *Stack, gpa: std.mem.Allocator, id: NodeId) std.mem.Allocator.Error!void {
+        if (s.frames.items.len > 0) {
+            try s.node_arena.append(gpa, id);
+            s.top().nodes_end = @intCast(s.node_arena.items.len);
+            return;
+        }
+        try s.nodes.append(gpa, id);
+    }
+
+    pub fn captureMany(s: *Stack, gpa: std.mem.Allocator, ids: []const NodeId) std.mem.Allocator.Error!void {
+        if (ids.len == 0) return;
+        if (s.frames.items.len > 0) {
+            try s.node_arena.appendSlice(gpa, ids);
+            s.top().nodes_end = @intCast(s.node_arena.items.len);
+            return;
+        }
+        try s.nodes.appendSlice(gpa, ids);
+    }
+
+    /// Pops the top frame and hands its captures to the parent (the parent's
+    /// window is extended over the child's), or to the top-level list when
+    /// it was the last frame.
+    pub fn popAndCapture(s: *Stack, gpa: std.mem.Allocator) std.mem.Allocator.Error!?Frame {
+        const f = s.frames.pop() orelse return null;
+        if (f.nodes_start != f.nodes_end) {
+            if (s.frames.items.len > 0) {
+                s.top().nodes_end = f.nodes_end;
+            } else {
+                try s.nodes.appendSlice(gpa, s.node_arena.items[f.nodes_start..f.nodes_end]);
+            }
+        }
+        return f;
+    }
+
+    /// Moves the top frame's captures to its parent (or the top-level list)
+    /// without popping it; used by partial commits.
+    pub fn collectCaptures(s: *Stack, gpa: std.mem.Allocator) std.mem.Allocator.Error!void {
+        const n = s.frames.items.len;
+        if (n == 0) return;
+        const f = s.frames.items[n - 1];
+        if (f.nodes_end > f.nodes_start) {
+            if (n == 1) {
+                try s.nodes.appendSlice(gpa, s.node_arena.items[f.nodes_start..f.nodes_end]);
+            } else {
+                s.frames.items[n - 2].nodes_end = f.nodes_end;
+            }
+        }
+    }
+
+    /// Discards captures made since `pos` (backtrack and fail).
+    pub fn truncateArena(s: *Stack, pos: u32) void {
+        s.node_arena.shrinkRetainingCapacity(pos);
+    }
+
+    pub fn pushLR(s: *Stack, gpa: std.mem.Allocator, data: LrFrameData) std.mem.Allocator.Error!u32 {
+        try s.lr_data.append(gpa, data);
+        return @intCast(s.lr_data.items.len);
+    }
+
+    pub fn lr(s: *Stack, f: Frame) *LrFrameData {
+        return &s.lr_data.items[f.lr_idx - 1];
+    }
+};
+
+// ---------------------------------------------------------------------------
+// Machine
+// ---------------------------------------------------------------------------
+
+/// The virtual machine over runtime tables (go/vm.go). `Interpreter` wraps
+/// it for generated parsers whose tables are comptime; `Machine` itself is
+/// what a dynamic host (a REPL, the differential test driver) uses.
+pub const Machine = struct {
+    gpa: std.mem.Allocator,
+    bc: *const Bytecode,
+    tree_storage: Tree,
+    stack: Stack = .{},
+    /// Furthest failure position, -1 before the first failure.
+    ffp: i64 = -1,
+    ffp_pc: u32 = 0,
+    /// Set by `choice_pred`, consulted by `throw`, restored from the popped
+    /// backtrack frame on failure - exactly as go/vm.go does, including the
+    /// cases where that leaves it stale.
+    predicate: bool = false,
+    show_fails: bool = false,
+    expected: ExpectedInfo = .{},
+    /// Per-label messages installed with `setLabelMessages`, indexed by
+    /// string id; the Go runtime appends them to the string table instead.
+    label_messages: []?[]const u8,
+    cap_offset_id: i32 = -1,
+    cap_offset_start: u32 = 0,
+    last_error: ParseError = .{},
+
+    pub fn init(gpa: std.mem.Allocator, bc: *const Bytecode) std.mem.Allocator.Error!Machine {
+        const msgs = try gpa.alloc(?[]const u8, bc.strs.len);
+        @memset(msgs, null);
+        var m: Machine = .{
+            .gpa = gpa,
+            .bc = bc,
+            .tree_storage = .{ .strs = bc.strs, .messages = msgs },
+            .label_messages = msgs,
+        };
+        errdefer m.deinit();
+        // The Go VM pre-sizes its arenas the same way (NewVirtualMachine).
+        try m.tree_storage.nodes.ensureTotalCapacity(gpa, 256);
+        try m.tree_storage.children.ensureTotalCapacity(gpa, 512);
+        try m.tree_storage.child_ranges.ensureTotalCapacity(gpa, 256);
+        try m.stack.frames.ensureTotalCapacity(gpa, 256);
+        try m.stack.node_arena.ensureTotalCapacity(gpa, 256);
+        try m.stack.nodes.ensureTotalCapacity(gpa, 256);
+        return m;
+    }
+
+    pub fn deinit(self: *Machine) void {
+        self.tree_storage.deinit(self.gpa);
+        self.stack.deinit(self.gpa);
+        self.gpa.free(self.label_messages);
+        self.label_messages = &.{};
+    }
+
+    pub fn setShowFails(self: *Machine, v: bool) void {
+        self.show_fails = v;
+    }
+
+    /// Binds messages to labels by name; unknown labels are ignored, as the
+    /// Go `CompileErrorLabels` does.
+    pub fn setLabelMessages(self: *Machine, msgs: []const LabelMessage) void {
+        for (msgs) |m| {
+            if (self.labelId(m.label)) |id| self.label_messages[id] = m.message;
+        }
+    }
+
+    pub fn labelId(self: *const Machine, label_name: []const u8) ?u16 {
+        for (self.bc.strs, 0..) |s, i| {
+            if (std.mem.eql(u8, s, label_name)) return @intCast(i);
+        }
+        return null;
+    }
+
+    pub fn messages(self: *const Machine) []const ?[]const u8 {
+        return self.label_messages;
+    }
+
+    /// The tree of the last match. Owned by the machine and reset by the
+    /// next match; `Tree.copy` retains it.
+    pub fn tree(self: *const Machine) *const Tree {
+        return &self.tree_storage;
+    }
+
+    /// == vm.Match: runs the `call <first rule>; halt` prologue from pc 0.
+    pub fn match(self: *Machine, input: []const u8) Error!MatchResult {
+        return self.matchAddress(input, 0, false);
+    }
+
+    /// `match` that stores the error and hands back only the tree.
+    pub fn parse(self: *Machine, input: []const u8) Error!*const Tree {
+        const r = try self.match(input);
+        if (r.err) |e| {
+            self.last_error = e;
+            return error.ParseFailed;
+        }
+        return r.tree.?;
+    }
+
+    /// == vm.MatchRule: `rule_address > 0` starts at that rule with a call
+    /// frame returning to the prologue's `halt`. `left_recursive` selects the
+    /// LR entry (an LR frame plus memo entry) for rules the grammar compiler
+    /// marked as left recursive.
+    pub fn matchAddress(self: *Machine, input: []const u8, rule_address: u32, left_recursive: bool) Error!MatchResult {
+        const gpa = self.gpa;
+        const bc = self.bc;
+        const code = bc.code;
+        const sets = bc.sets;
+        if (input.len > std.math.maxInt(u32)) return error.InvalidBytecode;
+        const ilen: u32 = @intCast(input.len);
+        var cursor: u32 = 0;
+        var pc: u32 = 0;
+
+        self.stack.reset();
+        self.tree_storage.reset();
+        self.tree_storage.input = input;
+        self.tree_storage.strs = bc.strs;
+        self.tree_storage.messages = self.label_messages;
+        self.ffp = -1;
+        self.ffp_pc = 0;
+        self.expected.clear();
+        self.predicate = false;
+
+        if (rule_address > 0) {
+            if (left_recursive) return error.InvalidBytecode; // left recursion lands with the LR opcodes
+            try self.stack.push(gpa, .{ .kind = .call, .pc = opSize(.call) });
+            pc = rule_address;
+        }
+
+        while (true) {
+            dispatch: while (true) {
+                const raw = code[pc];
+                if (raw >= op_count) return error.InvalidBytecode;
+                const op: Op = @enumFromInt(raw);
+                switch (op) {
+                    .halt => {
+                        self.setRootFromTopLevel();
+                        return .{ .tree = &self.tree_storage, .cursor = cursor, .err = null };
+                    },
+                    .any => {
+                        if (cursor >= ilen) break :dispatch;
+                        cursor += decodeRune(input, cursor).size;
+                        pc += 1;
+                    },
+                    .char => {
+                        const e: u32 = readU16(code, pc + 1);
+                        if (cursor >= ilen) break :dispatch;
+                        const d = decodeRune(input, cursor);
+                        if (d.rune != e) {
+                            if (self.show_fails) self.updateExpected(cursor, .{ .a = e });
+                            break :dispatch;
+                        }
+                        cursor += d.size;
+                        pc += 3;
+                    },
+                    .char32 => {
+                        const e: u32 = readU32(code, pc + 1);
+                        if (cursor >= ilen) break :dispatch;
+                        const d = decodeRune(input, cursor);
+                        if (d.rune != e) {
+                            if (self.show_fails) self.updateExpected(cursor, .{ .a = e });
+                            break :dispatch;
+                        }
+                        cursor += d.size;
+                        pc += 5;
+                    },
+                    .range => {
+                        if (cursor >= ilen) break :dispatch;
+                        const d = decodeRune(input, cursor);
+                        const a: u32 = readU16(code, pc + 1);
+                        const b: u32 = readU16(code, pc + 3);
+                        if (d.rune < a or d.rune > b) {
+                            if (self.show_fails) self.updateExpected(cursor, .{ .a = a, .b = b });
+                            break :dispatch;
+                        }
+                        cursor += d.size;
+                        pc += 5;
+                    },
+                    .range32 => {
+                        if (cursor >= ilen) break :dispatch;
+                        const d = decodeRune(input, cursor);
+                        const a: u32 = readU32(code, pc + 1);
+                        const b: u32 = readU32(code, pc + 5);
+                        if (d.rune < a or d.rune > b) {
+                            if (self.show_fails) self.updateExpected(cursor, .{ .a = a, .b = b });
+                            break :dispatch;
+                        }
+                        cursor += d.size;
+                        pc += 9;
+                    },
+                    .set => {
+                        if (cursor >= ilen) break :dispatch;
+                        const c = input[cursor];
+                        const i = readU16(code, pc + 1);
+                        if (!sets[i].has(c)) {
+                            if (self.show_fails) self.updateSetExpected(cursor, i);
+                            break :dispatch;
+                        }
+                        cursor += 1;
+                        pc += 3;
+                    },
+                    .span => {
+                        const set = sets[readU16(code, pc + 1)];
+                        while (cursor < ilen and set.has(input[cursor])) cursor += 1;
+                        pc += 3;
+                    },
+                    .fail => break :dispatch,
+                    .fail_twice => {
+                        // Pops the predicate's choice frame without truncating the arena.
+                        _ = self.stack.pop() orelse return error.InvalidBytecode;
+                        break :dispatch;
+                    },
+                    .choice => {
+                        try self.stack.push(gpa, .{ .kind = .backtracking, .pc = readU16(code, pc + 1), .cursor = cursor });
+                        pc += 3;
+                    },
+                    .choice_pred => {
+                        try self.stack.push(gpa, .{ .kind = .backtracking, .pc = readU16(code, pc + 1), .cursor = cursor, .predicate = true });
+                        pc += 3;
+                        self.predicate = true;
+                    },
+                    .commit => {
+                        _ = self.stack.pop() orelse return error.InvalidBytecode;
+                        pc = readU16(code, pc + 1);
+                    },
+                    .back_commit => {
+                        const f = self.stack.pop() orelse return error.InvalidBytecode;
+                        cursor = f.cursor;
+                        pc = readU16(code, pc + 1);
+                    },
+                    .partial_commit => {
+                        pc = readU16(code, pc + 1);
+                        if (self.stack.len() == 0) return error.InvalidBytecode;
+                        self.stack.top().cursor = cursor;
+                    },
+                    .call => {
+                        const target = readU16(code, pc + 1);
+                        try self.stack.push(gpa, .{ .kind = .call, .pc = pc + 4 });
+                        pc = target;
+                    },
+                    .call_lr, .return_lr, .cap_return_lr => return error.InvalidBytecode, // left recursion lands in a later slice
+                    .@"return" => {
+                        const f = self.stack.pop() orelse return error.InvalidBytecode;
+                        pc = f.pc;
+                    },
+                    .jump => pc = readU16(code, pc + 1),
+                    .throw => {
+                        if (self.predicate) {
+                            pc += 3;
+                            break :dispatch;
+                        }
+                        const lb = readU16(code, pc + 1);
+                        if (bc.rxps[lb] >= 0) {
+                            try self.stack.push(gpa, .{ .kind = .call, .pc = pc + 3 });
+                            pc = @intCast(bc.rxps[lb]);
+                            continue :dispatch;
+                        }
+                        self.last_error = self.mkError(input, lb, cursor, self.ffp);
+                        return .{ .tree = null, .cursor = cursor, .err = self.last_error };
+                    },
+                    .cap_begin => {
+                        try self.stack.push(gpa, .{ .kind = .capture, .cap_id = readU16(code, pc + 1), .cursor = cursor });
+                        pc += 3;
+                    },
+                    .cap_end => {
+                        const f = self.stack.pop() orelse return error.InvalidBytecode;
+                        // The slice stays valid after the truncation because
+                        // the arena keeps its capacity; newNode reads it before
+                        // its single append.
+                        const nodes = self.stack.frameNodes(f);
+                        self.stack.truncateArena(f.nodes_start);
+                        try self.newNode(cursor, f, nodes);
+                        pc += 1;
+                    },
+                    .cap_term => {
+                        const offset = readU16(code, pc + 1);
+                        if (offset > 0) {
+                            const id = try self.tree_storage.addString(gpa, cursor - offset, cursor);
+                            try self.stack.capture(gpa, id);
+                        }
+                        pc += 3;
+                    },
+                    .cap_non_term => {
+                        const id = readU16(code, pc + 1);
+                        const offset = readU16(code, pc + 3);
+                        if (offset > 0) {
+                            const named = try self.tree_storage.addNamedString(gpa, id, cursor - offset, cursor);
+                            try self.stack.capture(gpa, named);
+                        }
+                        pc += 5;
+                    },
+                    .cap_term_begin_offset => {
+                        self.cap_offset_id = -1;
+                        self.cap_offset_start = cursor;
+                        pc += 1;
+                    },
+                    .cap_non_term_begin_offset => {
+                        self.cap_offset_id = readU16(code, pc + 1);
+                        self.cap_offset_start = cursor;
+                        pc += 3;
+                    },
+                    .cap_end_offset => {
+                        const offset = cursor - self.cap_offset_start;
+                        pc += 1;
+                        if (offset > 0) {
+                            const begin = cursor - offset;
+                            if (self.cap_offset_id < 0) {
+                                const id = try self.tree_storage.addString(gpa, begin, cursor);
+                                try self.stack.capture(gpa, id);
+                            } else {
+                                const named = try self.tree_storage.addNamedString(gpa, self.cap_offset_id, begin, cursor);
+                                try self.stack.capture(gpa, named);
+                            }
+                        }
+                    },
+                    .cap_commit => {
+                        _ = try self.stack.popAndCapture(gpa) orelse return error.InvalidBytecode;
+                        pc = readU16(code, pc + 1);
+                    },
+                    .cap_back_commit => {
+                        const f = try self.stack.popAndCapture(gpa) orelse return error.InvalidBytecode;
+                        cursor = f.cursor;
+                        pc = readU16(code, pc + 1);
+                    },
+                    .cap_partial_commit => {
+                        pc = readU16(code, pc + 1);
+                        if (self.stack.len() == 0) return error.InvalidBytecode;
+                        self.stack.top().cursor = cursor;
+                        try self.stack.collectCaptures(gpa);
+                        // Start a fresh capture window for the next iteration.
+                        const top = self.stack.top();
+                        top.nodes_start = @intCast(self.stack.node_arena.items.len);
+                        top.nodes_end = top.nodes_start;
+                    },
+                    .cap_return => {
+                        const f = try self.stack.popAndCapture(gpa) orelse return error.InvalidBytecode;
+                        pc = f.pc;
+                    },
+                }
+            }
+
+            // Failure: remember the furthest point, then unwind to the
+            // nearest backtrack frame.
+            if (@as(i64, cursor) > self.ffp) {
+                self.ffp = cursor;
+                self.ffp_pc = pc;
+            }
+            var resumed = false;
+            while (self.stack.pop()) |f| {
+                self.stack.truncateArena(f.nodes_start);
+                switch (f.kind) {
+                    .backtracking => {
+                        pc = f.pc;
+                        self.predicate = f.predicate;
+                        cursor = f.cursor;
+                        resumed = true;
+                        break;
+                    },
+                    .lr_call => return error.InvalidBytecode, // left recursion lands in a later slice
+                    .call, .capture => {},
+                }
+            }
+            if (resumed) continue;
+
+            self.setRootFromTopLevel();
+            self.last_error = self.mkError(input, 0, cursor, self.ffp);
+            return .{ .tree = &self.tree_storage, .cursor = cursor, .err = self.last_error };
+        }
+    }
+
+    fn setRootFromTopLevel(self: *Machine) void {
+        const n = self.stack.nodes.items;
+        if (n.len > 0) self.tree_storage.root_id = n[n.len - 1];
+    }
+
+    /// go/vm.go newNode: turns a closed capture frame's nodes into one node.
+    /// Reads `nodes` completely before the single `capture` append.
+    fn newNode(self: *Machine, cursor: u32, f: Frame, nodes: []const NodeId) std.mem.Allocator.Error!void {
+        const gpa = self.gpa;
+        const is_rxp = self.bc.isRecoveryLabel(f.cap_id);
+        const cap_id: i32 = @intCast(f.cap_id);
+        const start = f.cursor;
+        const end = cursor;
+        var node_id: NodeId = 0;
+        var has_node = false;
+        switch (nodes.len) {
+            0 => {
+                if (cursor > f.cursor) {
+                    node_id = try self.tree_storage.addString(gpa, start, end);
+                    has_node = true;
+                } else if (!is_rxp) {
+                    // Only recovery expressions produce a node for an empty match.
+                    return;
+                }
+            },
+            1 => {
+                node_id = nodes[0];
+                has_node = true;
+            },
+            else => {
+                node_id = try self.tree_storage.addSequence(gpa, nodes, start, end);
+                has_node = true;
+            },
+        }
+
+        if (is_rxp) {
+            // The message id is the label itself; `Tree.message` resolves the
+            // bound message through the per-machine table.
+            const err_node = if (has_node)
+                try self.tree_storage.addErrorWithChild(gpa, cap_id, cap_id, node_id, start, end)
+            else
+                try self.tree_storage.addError(gpa, cap_id, cap_id, start, end);
+            try self.stack.capture(gpa, err_node);
+            return;
+        }
+        if (!has_node) return;
+        if (f.cap_id == 0) {
+            try self.stack.capture(gpa, node_id);
+            return;
+        }
+        const named = try self.tree_storage.addNode(gpa, cap_id, node_id, start, end);
+        try self.stack.capture(gpa, named);
+    }
+
+    fn updateExpected(self: *Machine, cursor: u32, e: Expected) void {
+        const c: i64 = cursor;
+        if (c > self.ffp) self.expected.clear();
+        if (c >= self.ffp) self.expected.add(e);
+    }
+
+    fn updateSetExpected(self: *Machine, cursor: u32, sid: u16) void {
+        const c: i64 = cursor;
+        if (c > self.ffp) self.expected.clear();
+        if (c >= self.ffp) {
+            for (self.bc.sexp[sid]) |item| self.expected.add(item);
+        }
+    }
+
+    fn mkError(self: *const Machine, input: []const u8, label_id: u32, cursor: u32, err_cursor: i64) ParseError {
+        return .{
+            .label_id = label_id,
+            .start = cursor,
+            .end = @intCast(err_cursor),
+            .ffp_pc = self.ffp_pc,
+            .unexpected = if (cursor >= input.len) null else decodeRune(input, cursor).rune,
+            .expected = if (self.show_fails) self.expected.items() else &.{},
+        };
+    }
+};
+
+// ---------------------------------------------------------------------------
+// Interpreter (generated parsers)
 // ---------------------------------------------------------------------------
 
 /// Instantiated by the generated file as `runtime.Interpreter(bytecode, Rule, &left_recursive_rules)`.
@@ -467,30 +1199,22 @@ pub fn Interpreter(comptime bc: Bytecode, comptime RuleT: type, comptime lr_rule
         pub const tables = bc;
         pub const messages_len = bc.strs.len;
 
-        gpa: std.mem.Allocator,
-        show_fails: bool = false,
-        messages: [bc.strs.len]?[]const u8 = [_]?[]const u8{null} ** bc.strs.len,
-        tree_storage: Tree = .{ .strs = bc.strs },
-        last_error: ParseError = .{},
+        machine: Machine,
 
-        pub fn init(gpa: std.mem.Allocator) Self {
-            return .{ .gpa = gpa };
+        pub fn init(gpa: std.mem.Allocator) std.mem.Allocator.Error!Self {
+            return .{ .machine = try Machine.init(gpa, &bc) };
         }
 
         pub fn deinit(self: *Self) void {
-            self.tree_storage.deinit(self.gpa);
+            self.machine.deinit();
         }
 
         pub fn setShowFails(self: *Self, v: bool) void {
-            self.show_fails = v;
+            self.machine.setShowFails(v);
         }
 
-        /// Binds messages to labels by name; unknown labels are ignored, as
-        /// the Go `CompileErrorLabels` does.
         pub fn setLabelMessages(self: *Self, msgs: []const LabelMessage) void {
-            for (msgs) |m| {
-                if (labelId(m.label)) |id| self.messages[id] = m.message;
-            }
+            self.machine.setLabelMessages(msgs);
         }
 
         pub fn labelId(label_name: []const u8) ?u16 {
@@ -511,10 +1235,39 @@ pub fn Interpreter(comptime bc: Bytecode, comptime RuleT: type, comptime lr_rule
             return false;
         }
 
+        pub fn messages(self: *const Self) []const ?[]const u8 {
+            return self.machine.messages();
+        }
+
+        pub fn match(self: *Self, input: []const u8) Error!MatchResult {
+            return self.machine.match(input);
+        }
+
+        pub fn matchRule(self: *Self, input: []const u8, rule: RuleT) Error!MatchResult {
+            return self.machine.matchAddress(input, ruleAddress(rule), isLeftRecursive(rule));
+        }
+
+        pub fn parse(self: *Self, input: []const u8) Error!*const Tree {
+            return self.machine.parse(input);
+        }
+
+        pub fn parseRule(self: *Self, input: []const u8, rule: RuleT) Error!*const Tree {
+            const r = try self.matchRule(input, rule);
+            if (r.err) |e| {
+                self.machine.last_error = e;
+                return error.ParseFailed;
+            }
+            return r.tree.?;
+        }
+
+        pub fn lastError(self: *const Self) ParseError {
+            return self.machine.last_error;
+        }
+
         /// The tree of the last match. Owned by the parser and reset by the
         /// next match; `Tree.copy` retains it.
         pub fn tree(self: *const Self) *const Tree {
-            return &self.tree_storage;
+            return self.machine.tree();
         }
     };
 }

@@ -138,7 +138,7 @@ pub const Rule = enum(u16) {
 pub const entry_rule: Rule = .P;
 pub const left_recursive_rules = [_]Rule{};
 
-pub const Parser = runtime.Parser(bytecode, Rule, &left_recursive_rules);
+pub const Parser = runtime.Interpreter(bytecode, Rule, &left_recursive_rules);
 
 test "langlang tables" {
     try runtime.verifyTables(bytecode);
