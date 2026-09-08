@@ -46,10 +46,7 @@ type tree struct {
 	strs        []string
 	input       []byte
 	root        NodeID
-	// hasRoot records whether SetRoot ran for the current match; the
-	// public Root() keeps its historical `root < len(nodes)` heuristic.
-	hasRoot bool
-	posView *posIndex
+	posView     *posIndex
 }
 
 func (t *tree) bindInput(input []byte)    { t.input = input }
@@ -60,11 +57,10 @@ func (t *tree) reset() {
 	t.childRanges = t.childRanges[:0]
 	t.posView = nil
 	t.root = 0
-	t.hasRoot = false
 }
 
 func (t *tree) Root() (NodeID, bool)                { return t.root, int(t.root) < len(t.nodes) }
-func (t *tree) SetRoot(id NodeID)                   { t.root = id; t.hasRoot = true }
+func (t *tree) SetRoot(id NodeID)                   { t.root = id }
 func (t *tree) Type(id NodeID) NodeType             { return t.nodes[id].typ }
 func (t *tree) MessageID(id NodeID) int32           { return t.nodes[id].messageID }
 func (t *tree) Message(id NodeID) string            { return t.strs[t.MessageID(id)] }
@@ -152,7 +148,6 @@ func (t *tree) Copy() Tree {
 		strs:        t.strs,
 		input:       t.input,
 		root:        t.root,
-		hasRoot:     t.hasRoot,
 	}
 }
 

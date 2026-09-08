@@ -120,7 +120,7 @@ func goDumpMode(bt *Bytecode, labels map[string]string, input []byte, showFails 
 	vm.SetShowFails(showFails)
 	vm.SetLabelMessages(bt.CompileErrorLabels(labels))
 	tree, cur, err := vm.Match(input)
-	return CanonicalDump(tree, cur, err)
+	return CanonicalDump(vm, tree, cur, err)
 }
 
 // modes runs a comparison with show_fails off and on; the second exercises

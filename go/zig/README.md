@@ -8,7 +8,7 @@ addresses. It compiles with Zig 0.15.1 for native targets and for
 trees, byte spans, error-recovery nodes and error messages byte for byte.
 
 ```sh
-go install github.com/jeffersonmourak/langlang/go/cmd/langlang@v0.0.13-zig.1   # or @zig-parser-gen for the branch head
+go install github.com/jeffersonmourak/langlang/go/cmd/langlang@v0.0.13-zig.2   # or @zig-parser-gen for the branch head
 langlang -grammar my.peg -output-language zig -output-path parser.zig
 zig test parser.zig          # runs the emitted table check
 ```

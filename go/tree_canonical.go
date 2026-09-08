@@ -15,8 +15,12 @@ import (
 //	<2*depth spaces>#<id> <string|sequence|node|err> <name or -> <start> <end>[ msg=<message>]
 //
 // Node ids are part of the format on purpose: they pin the builders' append
-// order, which the public Tree interface cannot observe.
-func CanonicalDump(t Tree, cursor int, err error) string {
+// order, which the public Tree interface cannot observe. The VM is needed
+// to tell "no root was set" (an empty top-level capture list) from "node 0
+// is the root", which the public Root() heuristic conflates; keeping that
+// out of tree.go leaves the pasted Go runtime, and so every generated Go
+// parser, byte-identical to upstream.
+func CanonicalDump(vm *virtualMachine, t Tree, cursor int, err error) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "cursor=%d\n", cursor)
 	if err != nil {
@@ -39,7 +43,7 @@ func CanonicalDump(t Tree, cursor int, err error) string {
 		return b.String()
 	}
 	tt := t.(*tree)
-	if !tt.hasRoot {
+	if len(vm.stack.nodes) == 0 {
 		b.WriteString("noroot\n")
 		return b.String()
 	}

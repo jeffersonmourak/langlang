@@ -263,6 +263,11 @@ func main() {
 
 func version() {
 	if info, ok := debug.ReadBuildInfo(); ok {
+		// A `go install module@version` build carries the module version
+		// but no VCS settings; a checkout build carries the reverse.
+		if info.Main.Version != "" && info.Main.Version != "(devel)" {
+			fmt.Printf("Version: %s (%s)\n", info.Main.Version, info.Main.Path)
+		}
 		for _, setting := range info.Settings {
 			switch setting.Key {
 			case "vcs.revision":
