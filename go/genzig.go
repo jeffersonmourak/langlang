@@ -266,7 +266,18 @@ func (g *zigEvalEmitter) writeTables(bt *Bytecode) {
 // writeRules emits the entry-address enum.  The address map is the same
 // walk gen.go uses for the Go `Parse<Rule>` methods: every ILabel takes
 // the byte cursor of the instruction that follows it.
-func (g *zigEvalEmitter) writeRules(asm *Program) {
+// zigRule is one grammar definition's entry: its byte address in the
+// encoded program and whether the compiler emitted call_lr for it.
+type zigRule struct {
+	name          string
+	address       int
+	leftRecursive bool
+}
+
+// zigRules lists the definitions in address order.  The address map is the
+// same walk gen.go uses for the Go `Parse<Rule>` methods: every ILabel
+// takes the byte cursor of the instruction that follows it.
+func zigRules(asm *Program) []zigRule {
 	var (
 		cursor  = 0
 		addrmap = make(map[int]int, len(asm.identifiers))
@@ -281,39 +292,51 @@ func (g *zigEvalEmitter) writeRules(asm *Program) {
 			cursor += instruction.SizeInBytes()
 		}
 	}
-	addrs := make([]int, 0, len(asm.identifiers))
-	for addr := range asm.identifiers {
-		addrs = append(addrs, addr)
-	}
-	sort.Ints(addrs)
-
-	g.out.writel("pub const Rule = enum(u16) {")
-	g.out.indent()
-	for _, addr := range addrs {
-		name := asm.strings[asm.identifiers[addr]]
-		g.out.writeil(fmt.Sprintf("%s = %d,", zigIdent(name), addrmap[addr]))
-	}
-	g.out.unindent()
-	g.out.writel("};")
-	g.out.writel("")
-
-	if len(addrs) > 0 {
-		first := asm.strings[asm.identifiers[addrs[0]]]
-		g.out.writel(fmt.Sprintf("pub const entry_rule: Rule = .%s;", zigIdent(first)))
-	}
-
-	// Rules entered through call_lr need an LR frame when a caller starts
-	// a match at them directly.
 	lrAddrs := map[int]bool{}
 	for _, instruction := range asm.code {
 		if ii, ok := instruction.(ICallLR); ok {
 			lrAddrs[labels[ii.Label.ID]] = true
 		}
 	}
-	lrNames := make([]string, 0, len(lrAddrs))
+	addrs := make([]int, 0, len(asm.identifiers))
+	for addr := range asm.identifiers {
+		addrs = append(addrs, addr)
+	}
+	sort.Ints(addrs)
+	rules := make([]zigRule, 0, len(addrs))
 	for _, addr := range addrs {
-		if lrAddrs[addrmap[addr]] {
-			lrNames = append(lrNames, "."+zigIdent(asm.strings[asm.identifiers[addr]]))
+		address := addrmap[addr]
+		rules = append(rules, zigRule{
+			name:          asm.strings[asm.identifiers[addr]],
+			address:       address,
+			leftRecursive: lrAddrs[address],
+		})
+	}
+	return rules
+}
+
+// writeRules emits the entry-address enum, the entry rule, and the rules
+// that need an LR frame when a caller starts a match at them directly.
+func (g *zigEvalEmitter) writeRules(asm *Program) {
+	rules := zigRules(asm)
+
+	g.out.writel("pub const Rule = enum(u16) {")
+	g.out.indent()
+	for _, r := range rules {
+		g.out.writeil(fmt.Sprintf("%s = %d,", zigIdent(r.name), r.address))
+	}
+	g.out.unindent()
+	g.out.writel("};")
+	g.out.writel("")
+
+	if len(rules) > 0 {
+		g.out.writel(fmt.Sprintf("pub const entry_rule: Rule = .%s;", zigIdent(rules[0].name)))
+	}
+
+	var lrNames []string
+	for _, r := range rules {
+		if r.leftRecursive {
+			lrNames = append(lrNames, "."+zigIdent(r.name))
 		}
 	}
 	switch len(lrNames) {

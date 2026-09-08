@@ -4,6 +4,7 @@
 // the same method set.
 //
 // Arguments: --input <path> [--messages "label=msg;label=msg"] [--show-fails]
+//            [--rule-address <n> [--rule-lr]]   (matchAddress instead of match)
 // Output (must match go/tree_canonical.go CanonicalDump byte for byte):
 //   cursor=<n>
 //   error label=<label or -> start=<s> end=<e> tree=<yes|no> msg=<text>   (on failure)
@@ -13,6 +14,8 @@ const std = @import("std");
 pub fn run(comptime R: type, p: anytype, bc: *const R.Bytecode, gpa: std.mem.Allocator, args: []const [:0]u8, out: *std.Io.Writer) !void {
     var input_path: ?[]const u8 = null;
     var show_fails = false;
+    var rule_address: u32 = 0;
+    var rule_lr = false;
     var msgs: std.ArrayList(R.LabelMessage) = .empty;
     defer msgs.deinit(gpa);
 
@@ -25,6 +28,12 @@ pub fn run(comptime R: type, p: anytype, bc: *const R.Bytecode, gpa: std.mem.All
             input_path = args[i];
         } else if (std.mem.eql(u8, a, "--show-fails")) {
             show_fails = true;
+        } else if (std.mem.eql(u8, a, "--rule-address")) {
+            i += 1;
+            if (i >= args.len) return error.MissingArgument;
+            rule_address = try std.fmt.parseInt(u32, args[i], 10);
+        } else if (std.mem.eql(u8, a, "--rule-lr")) {
+            rule_lr = true;
         } else if (std.mem.eql(u8, a, "--messages")) {
             i += 1;
             if (i >= args.len) return error.MissingArgument;
@@ -43,7 +52,7 @@ pub fn run(comptime R: type, p: anytype, bc: *const R.Bytecode, gpa: std.mem.All
 
     p.setShowFails(show_fails);
     p.setLabelMessages(msgs.items);
-    const r = try p.match(input);
+    const r = if (rule_address == 0) try p.match(input) else try p.matchAddress(input, rule_address, rule_lr);
 
     try out.print("cursor={d}\n", .{r.cursor});
     if (r.err) |e| {

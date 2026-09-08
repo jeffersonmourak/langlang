@@ -118,43 +118,6 @@ func goDump(bt *Bytecode, labels map[string]string, input []byte) string {
 	return CanonicalDump(tree, cur, err)
 }
 
-// usesLeftRecursion reports whether the program needs the LR opcodes,
-// which the Zig runtime does not implement yet.
-func usesLeftRecursion(bt *Bytecode) bool {
-	for pc := 0; pc < len(bt.code); {
-		op := bt.code[pc]
-		switch op {
-		case opCallLR, opReturnLR, opCapReturnLR:
-			return true
-		}
-		pc += opSizeFromByte(op)
-	}
-	return false
-}
-
-func opSizeFromByte(op byte) int {
-	switch op {
-	case opChar:
-		return opCharSizeInBytes
-	case opChar32:
-		return opChar32SizeInBytes
-	case opRange:
-		return opRangeSizeInBytes
-	case opRange32:
-		return opRange32SizeInBytes
-	case opSet, opSpan:
-		return opSetSizeInBytes
-	case opChoice, opChoicePred, opCommit, opPartialCommit, opBackCommit, opCapCommit, opCapBackCommit, opCapPartialCommit, opJump, opThrow, opCapBegin, opCapTerm, opCapNonTermBeginOffset:
-		return 3
-	case opCall, opCallLR:
-		return opCallSizeInBytes
-	case opCapNonTerm:
-		return opCapNonTermSizeInBytes
-	default:
-		return 1
-	}
-}
-
 // TestGenZigDifferential/vm replays the VM test table in its four
 // configurations through the Zig runtime; /grammars generates a parser
 // for each non-LR test grammar and replays the inputs under
@@ -187,9 +150,6 @@ func TestGenZigDifferential(t *testing.T) {
 					db := NewDatabase(cfg, loader)
 					bt, err := QueryBytecode(db, "test.peg")
 					require.NoError(t, err)
-					if usesLeftRecursion(bt) {
-						t.Skip("left recursion is not ported yet")
-					}
 
 					blob := zigTableBlob(bt)
 					tables := filepath.Join(work, fmt.Sprintf("%s_%d.tables", cfgSpec.name, i))
@@ -220,9 +180,6 @@ func TestGenZigDifferential(t *testing.T) {
 				db := NewDatabase(cfg, NewRelativeImportLoader())
 				bt, err := QueryBytecode(db, g.path)
 				require.NoError(t, err)
-				if usesLeftRecursion(bt) {
-					t.Skip("left recursion is not ported yet")
-				}
 				inputs := grammarInputs(t, g)
 				if len(inputs) == 0 {
 					t.Skip("no inputs for this grammar")
@@ -241,6 +198,39 @@ func TestGenZigDifferential(t *testing.T) {
 			})
 		}
 	})
+}
+
+// TestGenZigLeftRecursiveEntry starts a match directly at a left-recursive
+// rule through matchAddress(addr, true).  The Go MatchRule crashes on that
+// path (it pushes a plain call frame that return_lr cannot unwind), so
+// the oracle is Go's Match on a grammar whose first rule is the LR one:
+// the prologue calls it with precedence 1, which is what the LR entry
+// reproduces.
+func TestGenZigLeftRecursiveEntry(t *testing.T) {
+	requireZig(t)
+	g := zigGrammar{name: "leftrec_entry", path: "tests/arithmetic_leftrec/expr_only.peg", setup: disableCaptureSpaces}
+	cfg := zigTestConfig()
+	g.setup(cfg)
+	db := NewDatabase(cfg, NewRelativeImportLoader())
+	program, err := QueryProgram(db, g.path)
+	require.NoError(t, err)
+	rules := zigRules(program)
+	require.NotEmpty(t, rules)
+	require.True(t, rules[0].leftRecursive, "the first rule must be left recursive for this test to mean anything")
+	bt, err := QueryBytecode(db, g.path)
+	require.NoError(t, err)
+
+	driver := buildParserDriver(t, g)
+	for _, path := range grammarInputs(t, zigGrammar{name: "arithmetic_leftrec", path: "tests/arithmetic_leftrec/arithmetic.peg"}) {
+		path := path
+		t.Run(filepath.Base(path), func(t *testing.T) {
+			data, err := os.ReadFile(path)
+			require.NoError(t, err)
+			expected := goDump(bt, nil, data)
+			viaEntry := runDriver(t, driver, "--input", path, "--rule-address", fmt.Sprintf("%d", rules[0].address), "--rule-lr")
+			assert.Equal(t, expected, viaEntry)
+		})
+	}
 }
 
 // grammarInputs lists the corpus for a grammar: tests/<name>/inputs/*

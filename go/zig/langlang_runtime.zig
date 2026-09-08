@@ -609,6 +609,24 @@ pub const LrFrameData = struct {
     committed_end: u32,
 };
 
+/// Memo table for left recursion (go/vm.go lrMemoKey/lrMemoEntry): one entry
+/// per (production, cursor) while that production's LR frame is live.
+pub const LrMemoKey = struct {
+    address: u32,
+    cursor: u32,
+};
+
+pub const LrMemoEntry = struct {
+    /// Result cursor of the last successful iteration, `lr_result_left_rec`
+    /// while the first iteration is still running.
+    cursor: i32,
+    /// Growth counter; incremented like Go does and never read.
+    bound: u32,
+    precedence: u8,
+    /// Captures of the last successful iteration.
+    captures: std.ArrayList(NodeId) = .empty,
+};
+
 pub const Stack = struct {
     frames: std.ArrayList(Frame) = .empty,
     /// Captures of every live frame, in frame order.
@@ -749,6 +767,7 @@ pub const Machine = struct {
     label_messages: []?[]const u8,
     cap_offset_id: i32 = -1,
     cap_offset_start: u32 = 0,
+    lr_memo: std.AutoHashMapUnmanaged(LrMemoKey, LrMemoEntry) = .empty,
     last_error: ParseError = .{},
 
     pub fn init(gpa: std.mem.Allocator, bc: *const Bytecode) std.mem.Allocator.Error!Machine {
@@ -772,6 +791,8 @@ pub const Machine = struct {
     }
 
     pub fn deinit(self: *Machine) void {
+        self.memoClear();
+        self.lr_memo.deinit(self.gpa);
         self.tree_storage.deinit(self.gpa);
         self.stack.deinit(self.gpa);
         self.gpa.free(self.label_messages);
@@ -845,10 +866,19 @@ pub const Machine = struct {
         self.ffp_pc = 0;
         self.expected.clear();
         self.predicate = false;
+        self.memoClear();
 
         if (rule_address > 0) {
-            if (left_recursive) return error.InvalidBytecode; // left recursion lands with the LR opcodes
-            try self.stack.push(gpa, .{ .kind = .call, .pc = opSize(.call) });
+            if (left_recursive) {
+                // The Go MatchRule pushes a plain call frame here and its
+                // return_lr then reads lrData[-1]; entering through the same
+                // path doCallLR takes (precedence 1, as the compiler patches
+                // the prologue for an LR first rule) is the one deliberate
+                // difference from the Go VM.
+                try self.enterLR(rule_address, 1, opSize(.call), cursor);
+            } else {
+                try self.stack.push(gpa, .{ .kind = .call, .pc = opSize(.call) });
+            }
             pc = rule_address;
         }
 
@@ -963,7 +993,25 @@ pub const Machine = struct {
                         try self.stack.push(gpa, .{ .kind = .call, .pc = pc + 4 });
                         pc = target;
                     },
-                    .call_lr, .return_lr, .cap_return_lr => return error.InvalidBytecode, // left recursion lands in a later slice
+                    .call_lr => {
+                        const r = try self.doCallLR(pc, cursor);
+                        // Go's `pc, cursor, failed = vm.doCallLR(...)` writes
+                        // (0, 0) on the failure path before jumping to fail;
+                        // ffp and the reported cursor depend on it.
+                        pc = r.pc;
+                        cursor = r.cursor;
+                        if (r.failed) break :dispatch;
+                    },
+                    .return_lr => {
+                        const r = try self.doReturnLR(cursor);
+                        pc = r.pc;
+                        cursor = r.cursor;
+                    },
+                    .cap_return_lr => {
+                        const r = try self.doCapReturnLR(cursor);
+                        pc = r.pc;
+                        cursor = r.cursor;
+                    },
                     .@"return" => {
                         const f = self.stack.pop() orelse return error.InvalidBytecode;
                         pc = f.pc;
@@ -1081,7 +1129,19 @@ pub const Machine = struct {
                         resumed = true;
                         break;
                     },
-                    .lr_call => return error.InvalidBytecode, // left recursion lands in a later slice
+                    .lr_call => {
+                        if (try self.doFailLR(f)) |r| {
+                            pc = r.pc;
+                            cursor = r.cursor;
+                            resumed = true;
+                            break;
+                        }
+                        // Same multiple-assignment quirk as call_lr: the
+                        // non-resuming path leaves pc and cursor at 0, which
+                        // is the cursor an exhausted parse then reports.
+                        pc = 0;
+                        cursor = 0;
+                    },
                     .call, .capture => {},
                 }
             }
@@ -1091,6 +1151,130 @@ pub const Machine = struct {
             self.last_error = self.mkError(input, 0, cursor, self.ffp);
             return .{ .tree = &self.tree_storage, .cursor = cursor, .err = self.last_error };
         }
+    }
+
+    // ---- Left recursion (go/vm.go doCallLR / doReturnLR / doCapReturnLR / doFailLR) ----
+
+    const LrStep = struct {
+        pc: u32 = 0,
+        cursor: u32 = 0,
+        failed: bool = false,
+    };
+
+    fn memoClear(self: *Machine) void {
+        var it = self.lr_memo.valueIterator();
+        while (it.next()) |entry| entry.captures.deinit(self.gpa);
+        self.lr_memo.clearRetainingCapacity();
+    }
+
+    fn memoRemove(self: *Machine, key: LrMemoKey) void {
+        if (self.lr_memo.fetchRemove(key)) |kv| {
+            var entry = kv.value;
+            entry.captures.deinit(self.gpa);
+        }
+    }
+
+    /// First call of a left-recursive production at this cursor: creates
+    /// the memo entry in its "in progress" state and pushes the LR frame
+    /// whose return address is `ret_pc`.
+    fn enterLR(self: *Machine, addr: u32, prec: u8, ret_pc: u32, cursor: u32) std.mem.Allocator.Error!void {
+        try self.lr_memo.put(self.gpa, .{ .address = addr, .cursor = cursor }, .{ .cursor = lr_result_left_rec, .bound = 0, .precedence = prec });
+        const capture_start: u32 = @intCast(self.stack.node_arena.items.len);
+        const lr_idx = try self.stack.pushLR(self.gpa, .{ .address = addr, .precedence = prec, .result = lr_result_left_rec, .committed_end = capture_start });
+        try self.stack.push(self.gpa, .{ .kind = .lr_call, .pc = ret_pc, .cursor = cursor, .lr_idx = lr_idx });
+    }
+
+    fn doCallLR(self: *Machine, pc: u32, cursor: u32) std.mem.Allocator.Error!LrStep {
+        const code = self.bc.code;
+        const addr: u32 = readU16(code, pc + 1);
+        const prec = code[pc + 3];
+        const key: LrMemoKey = .{ .address = addr, .cursor = cursor };
+        if (self.lr_memo.getPtr(key)) |entry| {
+            // In the LR loop, or the caller's precedence is too low.
+            if (entry.cursor == lr_result_left_rec or prec < entry.precedence) return .{ .failed = true };
+            // Memoized result: inject its captures and skip the call.
+            try self.stack.captureMany(self.gpa, entry.captures.items);
+            return .{ .pc = pc + 4, .cursor = @intCast(entry.cursor) };
+        }
+        try self.enterLR(addr, prec, pc + 4, cursor);
+        return .{ .pc = addr, .cursor = cursor };
+    }
+
+    fn doReturnLR(self: *Machine, cursor: u32) Error!LrStep {
+        if (self.stack.len() == 0) return error.InvalidBytecode;
+        const f = self.stack.top().*;
+        if (f.kind != .lr_call or f.lr_idx == 0) return error.InvalidBytecode;
+        const lr = self.stack.lr(f);
+        const key: LrMemoKey = .{ .address = lr.address, .cursor = f.cursor };
+        const entry = self.lr_memo.getPtr(key) orelse return error.InvalidBytecode;
+        if (lr.result == lr_result_left_rec or @as(i64, cursor) > lr.result) {
+            // The match grew: remember it and run the body again.
+            entry.cursor = @intCast(cursor);
+            entry.bound += 1;
+            entry.precedence = lr.precedence;
+            lr.result = @intCast(cursor);
+            return .{ .pc = lr.address, .cursor = f.cursor };
+        }
+        // No more progress: finalize with the previous result.
+        _ = self.stack.pop();
+        const step: LrStep = .{ .pc = f.pc, .cursor = @intCast(lr.result) };
+        self.memoRemove(key);
+        return step;
+    }
+
+    fn doCapReturnLR(self: *Machine, cursor: u32) Error!LrStep {
+        if (self.stack.len() == 0) return error.InvalidBytecode;
+        const f = self.stack.top();
+        if (f.kind != .lr_call or f.lr_idx == 0) return error.InvalidBytecode;
+        const lr = self.stack.lr(f.*);
+        const key: LrMemoKey = .{ .address = lr.address, .cursor = f.cursor };
+        const entry = self.lr_memo.getPtr(key) orelse return error.InvalidBytecode;
+        if (lr.result == lr_result_left_rec or @as(i64, cursor) > lr.result) {
+            // The match grew: snapshot this iteration's captures, then run
+            // the body again on a fresh capture window.
+            entry.captures.clearRetainingCapacity();
+            try entry.captures.appendSlice(self.gpa, self.stack.node_arena.items[f.nodes_start..f.nodes_end]);
+            entry.cursor = @intCast(cursor);
+            entry.bound += 1;
+            entry.precedence = lr.precedence;
+            self.stack.truncateArena(f.nodes_start);
+            lr.result = @intCast(cursor);
+            lr.committed_end = f.nodes_start;
+            f.nodes_end = f.nodes_start;
+            return .{ .pc = lr.address, .cursor = f.cursor };
+        }
+        // No more progress: finalize with the last successful iteration's
+        // captures handed to the parent.
+        const frame = f.*;
+        _ = self.stack.pop();
+        self.stack.truncateArena(frame.nodes_start);
+        try self.stack.captureMany(self.gpa, entry.captures.items);
+        const step: LrStep = .{ .pc = frame.pc, .cursor = @intCast(lr.result) };
+        self.memoRemove(key);
+        return step;
+    }
+
+    /// An LR frame met while unwinding a failure (the caller already
+    /// truncated the arena to `f.nodes_start`). Returns where to resume
+    /// when a previous iteration succeeded, null to keep unwinding.
+    fn doFailLR(self: *Machine, f: Frame) std.mem.Allocator.Error!?LrStep {
+        const lr = self.stack.lr(f);
+        const key: LrMemoKey = .{ .address = lr.address, .cursor = f.cursor };
+        if (lr.result == lr_result_left_rec) {
+            self.memoRemove(key);
+            return null;
+        }
+        // `> 0`, not `>= 0`: an iteration that succeeded at cursor 0 is
+        // treated as a failure, exactly as go/vm.go does.
+        if (lr.result > 0) {
+            if (self.lr_memo.getPtr(key)) |entry| {
+                try self.stack.captureMany(self.gpa, entry.captures.items);
+                self.memoRemove(key);
+                return .{ .pc = f.pc, .cursor = @intCast(lr.result) };
+            }
+        }
+        self.memoRemove(key);
+        return null;
     }
 
     fn setRootFromTopLevel(self: *Machine) void {
@@ -1245,6 +1429,10 @@ pub fn Interpreter(comptime bc: Bytecode, comptime RuleT: type, comptime lr_rule
 
         pub fn matchRule(self: *Self, input: []const u8, rule: RuleT) Error!MatchResult {
             return self.machine.matchAddress(input, ruleAddress(rule), isLeftRecursive(rule));
+        }
+
+        pub fn matchAddress(self: *Self, input: []const u8, rule_address: u32, lr_entry: bool) Error!MatchResult {
+            return self.machine.matchAddress(input, rule_address, lr_entry);
         }
 
         pub fn parse(self: *Self, input: []const u8) Error!*const Tree {
