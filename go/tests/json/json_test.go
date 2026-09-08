@@ -12,6 +12,7 @@ import (
 //go:generate go run ../../cmd/langlang -grammar ../../../grammars/json.peg -output-language go -output-path ./json.nocap.go -disable-captures -go-parser NoCapParser -go-remove-lib
 //go:generate go run ../../cmd/langlang -grammar ../../../grammars/json.stripped.peg -output-language go -go-remove-lib -output-path ./json.stripped.go -go-parser StrippedParser
 //go:generate go run ../../cmd/langlang -grammar ../../../grammars/json.stripped.peg -output-language go -go-remove-lib -output-path ./json.stripped.nocap.go -disable-captures -go-parser StrippedNoCapParser
+//go:generate go run ../../cmd/langlang -grammar ../../../grammars/json.peg -output-language zig -output-path ./json.zig
 
 var inputNames = []string{"30kb", "500kb", "2000kb"}
 

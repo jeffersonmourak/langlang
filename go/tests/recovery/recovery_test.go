@@ -8,6 +8,7 @@ import (
 )
 
 //go:generate go run ../../cmd/langlang -grammar ./recovery.peg -output-language go -output-path ./recovery.go -disable-capture-spaces
+//go:generate go run ../../cmd/langlang -grammar ./recovery.peg -output-language zig -output-path ./recovery.zig -disable-capture-spaces
 
 func TestRecoverySuccess(t *testing.T) {
 	for _, test := range []struct {

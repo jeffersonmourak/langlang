@@ -10,7 +10,7 @@ import (
 	"strings"
 	"testing"
 
-	_ "github.com/clarete/langlang/go"
+	_ "github.com/jeffersonmourak/langlang/go"
 	_ "github.com/mna/pigeon/builder"
 	_ "github.com/pointlander/peg/set"
 

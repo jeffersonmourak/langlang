@@ -1,0 +1,5 @@
+if (a) {
+  a = 2;
+  while (b) c = d;
+}
+x = true;

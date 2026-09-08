@@ -9,6 +9,7 @@ import (
 
 //go:generate go run ../../cmd/langlang -grammar ./arithmetic.peg -output-language go -output-path ./arithmetic.go -disable-capture-spaces
 //go:generate go run ../../cmd/langlang -grammar ./arithmetic.peg -output-language go -output-path ./arithmetic.nocap.go -disable-capture-spaces -disable-captures -go-parser NoCapParser -go-remove-lib
+//go:generate go run ../../cmd/langlang -grammar ./arithmetic.peg -output-language zig -output-path ./arithmetic.zig -disable-capture-spaces
 
 func TestArithmeticSuccess(t *testing.T) {
 	for _, test := range []struct {

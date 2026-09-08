@@ -3,7 +3,7 @@ package lsp
 import (
 	"testing"
 
-	langlang "github.com/clarete/langlang/go"
+	langlang "github.com/jeffersonmourak/langlang/go"
 )
 
 func TestEngine_Definition_ImportAliasJumpsToImportedFile(t *testing.T) {

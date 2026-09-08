@@ -9,8 +9,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/clarete/langlang/go"
-	"github.com/clarete/langlang/go/ascii"
+	"github.com/jeffersonmourak/langlang/go"
+	"github.com/jeffersonmourak/langlang/go/ascii"
 )
 
 var theme = ascii.DefaultTheme
@@ -41,6 +41,9 @@ type args struct {
 	goOptPackage   *string
 	goOptParser    *string
 	goOptRemoveLib *bool
+
+	zigOptRuntimeImport *string
+	zigOptEmitRuntime   *string
 
 	diagnosticLevel *string
 	showVersion     *bool
@@ -81,6 +84,11 @@ func readArgs() *args {
 		goOptPackage:   flag.String("go-package", "parser", "Name of the go package in the generated parser"),
 		goOptParser:    flag.String("go-parser", "Parser", "Name of the go struct of the generated parser"),
 		goOptRemoveLib: flag.Bool("go-remove-lib", false, "Include lib in the output parser"),
+
+		// options specific to the zig generator
+
+		zigOptRuntimeImport: flag.String("zig-runtime-import", "", "Import the runtime with @import(<name>) instead of pasting it into the generated parser"),
+		zigOptEmitRuntime:   flag.String("zig-emit-runtime", "", "Also write the runtime source to this path (for -zig-runtime-import users)"),
 
 		diagnosticLevel: flag.String("diagnostics", "error", "Minimum diagnostic level to display: error, warning, info, hint, or all"),
 		showVersion:     flag.Bool("version", false, "Print the version and exit"),
@@ -228,6 +236,17 @@ func main() {
 			SourceFile:  *a.grammarPath,
 		})
 
+	case "zig":
+		outputData, err = langlang.GenZigEval(program, cfg, langlang.GenZigOptions{
+			SourceFile:    *a.grammarPath,
+			RuntimeImport: *a.zigOptRuntimeImport,
+		})
+		if err == nil && *a.zigOptEmitRuntime != "" {
+			if werr := os.WriteFile(*a.zigOptEmitRuntime, langlang.ZigRuntimeSource(), 0644); werr != nil {
+				fatal("Can't write zig runtime: %s", werr.Error())
+			}
+		}
+
 	// case "python":
 	// 	outputData, err = langlang.GenParserPython(ast)
 	default:
@@ -244,6 +263,11 @@ func main() {
 
 func version() {
 	if info, ok := debug.ReadBuildInfo(); ok {
+		// A `go install module@version` build carries the module version
+		// but no VCS settings; a checkout build carries the reverse.
+		if info.Main.Version != "" && info.Main.Version != "(devel)" {
+			fmt.Printf("Version: %s (%s)\n", info.Main.Version, info.Main.Path)
+		}
 		for _, setting := range info.Settings {
 			switch setting.Key {
 			case "vcs.revision":

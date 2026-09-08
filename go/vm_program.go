@@ -5,7 +5,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/clarete/langlang/go/ascii"
+	"github.com/jeffersonmourak/langlang/go/ascii"
 )
 
 type AsmFormatToken int

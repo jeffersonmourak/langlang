@@ -24,6 +24,14 @@ go/tests/json/json.stripped.nocap.go
 go/tests/langlang/langlang.go
 go/tests/langlang/langlang.nocap.go
 go/tests/recovery/recovery.go
+go/tests/arithmetic/arithmetic.zig
+go/tests/arithmetic_leftrec/arithmetic.zig
+go/tests/basic/basic.zig
+go/tests/charsets/charsets.zig
+go/tests/import/import.zig
+go/tests/json/json.zig
+go/tests/langlang/langlang.zig
+go/tests/recovery/recovery.zig
 go/*.test
 go/benches/go/**/*.out
 

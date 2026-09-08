@@ -1,4 +1,4 @@
-module github.com/clarete/langlang/go
+module github.com/jeffersonmourak/langlang/go
 
 go 1.21
 
