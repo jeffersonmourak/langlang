@@ -4,7 +4,7 @@ Branch `zig-parser-gen` of `jeffersonmourak/langlang`, forked at upstream tag `g
 
 ## What is being built
 
-A second code generator beside `go/gen.go`: `go/genzig.go`, selected with `-output-language zig`, that emits **one self-contained Zig file** — a hand-written runtime (`go/zig/langlang_runtime.zig`, a line-by-line port of `go/vm.go` + `vm_stack.go` + `vm_charset.go` + `tree.go`) pasted verbatim, followed by the grammar's bytecode tables as `comptime` data and a `Rule` enum of entry addresses. The generated file compiles with Zig 0.15.1 for native targets and for `wasm32-freestanding` with no libc, takes an allocator from the caller, and reproduces the Go VM's trees, byte spans, error-recovery nodes and error messages **byte for byte**, proven by a differential harness that runs the in-process Go VM and the generated Zig parser over the same inputs and compares a canonical dump.
+A second code generator beside `go/gen.go`: `go/genzig.go`, selected with `-output-language zig`, that emits **one self-contained Zig file** — a hand-written runtime (`go/zig/langlang_runtime.zig`, a line-by-line port of `go/vm.go` + `vm_stack.go` + `vm_charset.go` + `tree.go`) pasted verbatim, followed by the grammar's bytecode tables as `comptime` data, a `Rule` enum of entry addresses, and `pub const Parser = runtime.Interpreter(bytecode, Rule, &left_recursive_rules)`. Nothing else in the runtime may declare or reference a name the generated file declares at top level (`bytecode`, `Rule`, `entry_rule`, `left_recursive_rules`, `Parser`) — a pasted namespace resolves such a name to both declarations and Zig rejects the reference as ambiguous, which is also why the file has no type re-exports. The generated file compiles with Zig 0.15.1 for native targets and for `wasm32-freestanding` with no libc, takes an allocator from the caller, and reproduces the Go VM's trees, byte spans, error-recovery nodes and error messages **byte for byte**, proven by a differential harness that runs the in-process Go VM and the generated Zig parser over the same inputs and compares a canonical dump.
 
 The front end is untouched: the grammar parser, compiler and `Encode(asm, cfg)` (`go/vm_encoder.go:7`) are shared with the Go backend, so the `code` table the Zig file carries is identical to the one inside the Go parser and tree parity reduces to VM-semantics parity. The **full instruction set** is implemented — all 33 opcodes including left recursion (`call_lr`/`return_lr`/`cap_return_lr`), the fail path, recovery labels, expected-hint tracking and `mkErr` text — so a grammar that grows into any langlang feature regenerates without runtime work.
 
@@ -43,9 +43,9 @@ pub const runtime = struct {
 };
 // ---- END langlang runtime ----
 
-pub const NodeId = runtime.NodeId;  pub const NodeType = runtime.NodeType;  pub const Node = runtime.Node;
-pub const Range = runtime.Range;    pub const Tree = runtime.Tree;          pub const ParseError = runtime.ParseError;
-pub const MatchResult = runtime.MatchResult;  pub const LabelMessage = runtime.LabelMessage;  pub const Expected = runtime.Expected;
+// No re-exports: `pub const Tree = runtime.Tree;` at top level would make every
+// `Tree` inside the pasted runtime an ambiguous reference, so consumers spell
+// `parser.runtime.Tree`, `parser.runtime.NodeType`, ...
 
 pub const bytecode = runtime.Bytecode{
     .abi = 1,                                     // copied from the runtime source at generation time
@@ -56,16 +56,16 @@ pub const bytecode = runtime.Bytecode{
     .rxps = &[_]i32{ -1, 1344, 1352, 1360, 1368, 1376, -1, ... },   // len == strs.len; replaces both the rxps map and rxbs
     .srcm = null,                                 // or a SourceMap when generated with --grammar-source-map
 };
-pub const Rule = enum(u16) { @"Program" = 5, @"AnonDecl" = 734, ..., @"busclose" = 1376 };   // every field @"..."-quoted
-pub const entry_rule: Rule = .@"Program";
+pub const Rule = enum(u16) { Program = 5, AnonDecl = 734, ..., busclose = 1376 };   // @"..." only for keywords / non-identifiers (zig fmt strips the rest)
+pub const entry_rule: Rule = .Program;
 pub const left_recursive_rules = [_]Rule{};       // targets of any call_lr in the program
-pub const Parser = runtime.Parser(bytecode, Rule, &left_recursive_rules);
+pub const Parser = runtime.Interpreter(bytecode, Rule, &left_recursive_rules);
 test "langlang tables" { try runtime.verifyTables(bytecode); }
 ```
 
 With `-zig-runtime-import=<name>` the pasted block becomes `pub const runtime = @import("<name>");` and `-zig-emit-runtime <path>` writes the runtime file — for packages hosting several parsers. Not the mode circ uses.
 
-## Runtime public API (inside `runtime`, re-exported by the generated file)
+## Runtime public API (inside `runtime`; reached as `parser.runtime.*`)
 
 ```zig
 pub const abi_version: u32 = 1;
@@ -103,7 +103,7 @@ pub const ParseError = struct {
 pub const MatchResult = struct { tree: ?*const Tree, cursor: u32, err: ?ParseError };
 pub const Error = error{ ParseFailed, OutOfMemory, InvalidBytecode };
 pub fn verifyTables(comptime bc: Bytecode) !void;
-pub fn Parser(comptime bc: Bytecode, comptime RuleT: type, comptime lr_rules: []const RuleT) type { return struct {
+pub fn Interpreter(comptime bc: Bytecode, comptime RuleT: type, comptime lr_rules: []const RuleT) type { return struct {
     pub fn init(gpa: std.mem.Allocator) Self;                // pre-sizes like NewVirtualMachine (vm.go:235-254)
     pub fn deinit(self: *Self) void;
     pub fn setShowFails(self: *Self, v: bool) void;          // default false (as generated Go parsers and circ)
@@ -130,7 +130,7 @@ pub fn Parser(comptime bc: Bytecode, comptime RuleT: type, comptime lr_rules: []
 
 ## Generator design
 
-`go/genzig.go`: `GenZigEval(asm *Program, cfg *Config, opt GenZigOptions) (string, error)` with the same shape as `GenGoEval` (`gen.go:33`), calling the same `Encode(asm, cfg)`. Pipeline: header (commit hash via `getCommitHash`, `abi` read by regexp `^pub const abi_version: u32 = (\d+);$` from the embedded runtime, runtime sha256) → paste the runtime with its single `const std = @import("std");` line removed and 4-space indented (or the `@import` line in import mode) → re-exports → tables mirroring `gen.go:85-231` (`code` 24/line; `strs` through a new `zigQuote` that escapes every non-printable byte as `\xNN`; `sets` as `[32]u8`; `sexp` as integer pairs; `rxps` as a `[strs.len]i32` with `-1` default, subsuming `rxbs`; `srcm` when present) → `Rule` enum from the same address-map walk as `gen.go:255-267`, every field `@"..."`-quoted, `entry_rule` = first definition, `left_recursive_rules` = targets of any `ICallLR` → `Parser` alias → emitted `verifyTables` test. **No `text/template` pass** (`gen.go:322` would choke on `{{` in Zig source) and **no formatter at generation time**: the emitter is written `zig fmt`-clean and `zig fmt --check` runs as a test, so generating never needs a Zig toolchain. Errors instead of the Go encoder's silent `uint16(label)` truncation when `code` or `strs` exceed 65535. Reuses `outputWriter` (`gen.go:402-447`).
+`go/genzig.go`: `GenZigEval(asm *Program, cfg *Config, opt GenZigOptions) (string, error)` with the same shape as `GenGoEval` (`gen.go:33`), calling the same `Encode(asm, cfg)`. Pipeline: header (commit hash via `getCommitHash`, `abi` read by regexp `^pub const abi_version: u32 = (\d+);$` from the embedded runtime, runtime sha256) → paste the runtime with its single `const std = @import("std");` line removed and 4-space indented (or the `@import` line in import mode) → tables mirroring `gen.go:85-231` (`code` 24/line; `strs` through a new `zigQuote` that escapes every non-printable byte as `\xNN`; `sets` as `[32]u8`; `sexp` as integer pairs; `rxps` as a `[strs.len]i32` with `-1` default, subsuming `rxbs`; `srcm` when present) → `Rule` enum from the same address-map walk as `gen.go:255-267`, fields `@"..."`-quoted only when they are Zig keywords or not plain identifiers (`zig fmt` strips unnecessary quotes), `entry_rule` = first definition, `left_recursive_rules` = targets of any `ICallLR` → `Parser` alias → emitted `verifyTables` test. **No `text/template` pass** (`gen.go:322` would choke on `{{` in Zig source) and **no formatter at generation time**: the emitter is written `zig fmt`-clean (multi-row array literals are column-aligned the way `zig fmt` lays them out; one-element lists carry no inner spaces) and `zig fmt --check` runs as a test, so generating never needs a Zig toolchain. Errors instead of the Go encoder's silent `uint16(label)` truncation when `code` or `strs` exceed 65535. Reuses `outputWriter` (`gen.go:402-447`).
 
 CLI (`go/cmd/langlang/main.go`): `case "zig":` beside `case "go":` (`:222-235`), flags `-zig-runtime-import` (default `""`) and `-zig-emit-runtime <path>`; grammar flags (`-disable-capture-spaces`, …) flow through `cfg` unchanged.
 

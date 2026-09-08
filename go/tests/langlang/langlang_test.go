@@ -10,6 +10,7 @@ import (
 
 //go:generate go run ../../cmd/langlang -grammar ../../../grammars/langlang.peg -output-language go -output-path ./langlang.go
 //go:generate go run ../../cmd/langlang -grammar ../../../grammars/langlang.peg -output-language go -output-path ./langlang.nocap.go -disable-captures -go-parser NoCapParser -go-remove-lib
+//go:generate go run ../../cmd/langlang -grammar ../../../grammars/langlang.peg -output-language zig -output-path ./langlang.zig
 
 var grammarNames = []string{"csv", "json", "peg", "langlang"}
 

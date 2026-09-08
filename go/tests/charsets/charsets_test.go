@@ -9,6 +9,7 @@ import (
 
 //go:generate go run ../../cmd/langlang -grammar ./charsets.peg -output-language go -output-path ./charsets.go -disable-inline-defs=false
 //go:generate go run ../../cmd/langlang -grammar ./charsets.peg -output-language go -output-path ./charsets.nocap.go -disable-captures -go-parser NoCapParser -go-remove-lib -disable-inline-defs=false
+//go:generate go run ../../cmd/langlang -grammar ./charsets.peg -output-language zig -output-path ./charsets.zig -disable-inline-defs=false
 
 type P interface {
 	ParseIdentifier() (Tree, error)

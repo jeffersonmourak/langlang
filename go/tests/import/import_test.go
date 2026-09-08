@@ -9,6 +9,7 @@ import (
 
 //go:generate go run ../../cmd/langlang -grammar ./import_gr_expr.peg -output-language go -output-path ./import.go
 //go:generate go run ../../cmd/langlang -grammar ./import_gr_expr.peg -output-language go -output-path ./import.nocap.go -disable-captures -go-parser NoCapParser -go-remove-lib
+//go:generate go run ../../cmd/langlang -grammar ./import_gr_expr.peg -output-language zig -output-path ./import.zig
 
 func TestImport(t *testing.T) {
 	for _, test := range []struct {

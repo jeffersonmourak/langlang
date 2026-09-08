@@ -42,6 +42,9 @@ type args struct {
 	goOptParser    *string
 	goOptRemoveLib *bool
 
+	zigOptRuntimeImport *string
+	zigOptEmitRuntime   *string
+
 	diagnosticLevel *string
 	showVersion     *bool
 }
@@ -81,6 +84,11 @@ func readArgs() *args {
 		goOptPackage:   flag.String("go-package", "parser", "Name of the go package in the generated parser"),
 		goOptParser:    flag.String("go-parser", "Parser", "Name of the go struct of the generated parser"),
 		goOptRemoveLib: flag.Bool("go-remove-lib", false, "Include lib in the output parser"),
+
+		// options specific to the zig generator
+
+		zigOptRuntimeImport: flag.String("zig-runtime-import", "", "Import the runtime with @import(<name>) instead of pasting it into the generated parser"),
+		zigOptEmitRuntime:   flag.String("zig-emit-runtime", "", "Also write the runtime source to this path (for -zig-runtime-import users)"),
 
 		diagnosticLevel: flag.String("diagnostics", "error", "Minimum diagnostic level to display: error, warning, info, hint, or all"),
 		showVersion:     flag.Bool("version", false, "Print the version and exit"),
@@ -227,6 +235,17 @@ func main() {
 			RemoveLib:   *a.goOptRemoveLib,
 			SourceFile:  *a.grammarPath,
 		})
+
+	case "zig":
+		outputData, err = langlang.GenZigEval(program, cfg, langlang.GenZigOptions{
+			SourceFile:    *a.grammarPath,
+			RuntimeImport: *a.zigOptRuntimeImport,
+		})
+		if err == nil && *a.zigOptEmitRuntime != "" {
+			if werr := os.WriteFile(*a.zigOptEmitRuntime, langlang.ZigRuntimeSource(), 0644); werr != nil {
+				fatal("Can't write zig runtime: %s", werr.Error())
+			}
+		}
 
 	// case "python":
 	// 	outputData, err = langlang.GenParserPython(ast)
